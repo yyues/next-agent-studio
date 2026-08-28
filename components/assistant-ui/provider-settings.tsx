@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type FC } from "react";
+import { useEffect, useState, type FC } from "react";
 import { useTranslations } from "next-intl";
 import { Settings2Icon } from "lucide-react";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
@@ -14,33 +14,17 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import {
-  getClientRuntimeContext,
-  setClientRuntimeContext,
-} from "@/lib/client-runtime-context";
+  saveProviderLocal,
+  loadProviderLocal,
+  type ProviderConfig,
+} from "@/lib/provider-storage";
+import { getClientRuntimeContext } from "@/lib/client-runtime-context";
 
-type RoleItem = {
-  roleId: string;
-  displayName: string;
-  enabled: boolean;
-  skillIds: string[];
-};
-
-type ProviderForm = {
-  userId: string;
-  providerName: string;
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-  roleId: string;
-};
-
-const defaultForm: ProviderForm = {
-  userId: "demo-user",
+const defaultForm: ProviderConfig = {
   providerName: "openai-compatible",
   baseUrl: "https://api.openai.com/v1",
   apiKey: "",
   model: "gpt-5.6-luna",
-  roleId: "general",
 };
 
 export const ProviderSettingsButton: FC = () => {
@@ -49,20 +33,14 @@ export const ProviderSettingsButton: FC = () => {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [form, setForm] = useState<ProviderForm>(defaultForm);
+  const [form, setForm] = useState<ProviderConfig>(defaultForm);
   const [maskedApiKey, setMaskedApiKey] = useState("");
-  const [roles, setRoles] = useState<RoleItem[]>([]);
-  const [message, setMessage] = useState<string>("");
+  const [storedApiKey, setStoredApiKey] = useState("");  // 保留原始 key 用于测试连接
+  const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState<"success" | "error" | "">("");
-
-  const roleOptions = useMemo(
-    () => roles.filter((role) => role.enabled),
-    [roles],
-  );
 
   useEffect(() => {
     if (!open) return;
-
     let cancelled = false;
 
     const load = async () => {
@@ -71,60 +49,49 @@ export const ProviderSettingsButton: FC = () => {
       setMessageType("");
 
       try {
-        const runtime = getClientRuntimeContext();
-
-        const [providerRes, rolesRes] = await Promise.all([
-          fetch(`/api/settings/provider?userId=${encodeURIComponent(runtime.userId)}`),
-          fetch(`/api/settings/roles?userId=${encodeURIComponent(runtime.userId)}`),
-        ]);
-
-        if (!providerRes.ok) throw new Error(await providerRes.text());
-        if (!rolesRes.ok) throw new Error(await rolesRes.text());
-
-        const providerData = (await providerRes.json()) as {
-          userId: string;
-          providerName: string;
-          baseUrl: string;
-          model: string;
-          maskedApiKey: string;
-        };
-        const rolesData = (await rolesRes.json()) as {
-          currentRoleId: string;
-          roles: RoleItem[];
-        };
-
-        if (cancelled) return;
-
-        const selectedRoleId =
-          rolesData.currentRoleId || runtime.roleId || defaultForm.roleId;
-
-        setRoles(rolesData.roles);
-        setMaskedApiKey(providerData.maskedApiKey ?? "");
-        setForm({
-          userId: providerData.userId || runtime.userId,
-          providerName: providerData.providerName,
-          baseUrl: providerData.baseUrl,
-          apiKey: "",
-          model: providerData.model,
-          roleId: selectedRoleId,
-        });
-
-        setClientRuntimeContext({
-          userId: providerData.userId || runtime.userId,
-          roleId: selectedRoleId,
-        });
-      } catch (error) {
-        if (cancelled) return;
-        setMessage(error instanceof Error ? error.message : t("loadFailed"));
-        setMessageType("error");
-      } finally {
-        if (!cancelled) setLoading(false);
+        const userId = getClientRuntimeContext().userId;
+        // 优先从数据库加载（用户已保存过配置）
+        const res = await fetch(
+          `/api/settings/provider?userId=${encodeURIComponent(userId)}`,
+        );
+        if (res.ok) {
+          const data = (await res.json()) as {
+            providerName: string;
+            baseUrl: string;
+            model: string;
+            maskedApiKey: string;
+          };
+          if (cancelled) return;
+          setMaskedApiKey(data.maskedApiKey ?? "");
+          setForm({
+            providerName: data.providerName,
+            baseUrl: data.baseUrl,
+            apiKey: "",
+            model: data.model,
+          });
+        }
+      } catch {
+        // 数据库不可用，回退到本地加密存储
       }
+
+      try {
+        const local = await loadProviderLocal();
+        if (cancelled) return;
+        if (local) {
+          setForm({ ...local, apiKey: "" });
+          setMaskedApiKey(local.apiKey ? "********" : "");
+          setStoredApiKey(local.apiKey || "");
+        }
+      } catch {
+        // 本地存储也不可用，使用默认值
+      }
+
+      if (!cancelled) setLoading(false);
     };
 
     void load();
     return () => { cancelled = true; };
-  }, [open, t]);
+  }, [open]);
 
   const saveSettings = async () => {
     setSaving(true);
@@ -132,32 +99,36 @@ export const ProviderSettingsButton: FC = () => {
     setMessageType("");
 
     try {
-      const providerRes = await fetch("/api/settings/provider", {
+      const userId = getClientRuntimeContext().userId;
+      const res = await fetch("/api/settings/provider", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          userId: form.userId,
+          userId,
           providerName: form.providerName,
           baseUrl: form.baseUrl,
-          apiKey: form.apiKey,
+          apiKey: form.apiKey || storedApiKey,
           model: form.model,
         }),
       });
-      if (!providerRes.ok) throw new Error(await providerRes.text());
 
-      const roleRes = await fetch("/api/settings/roles", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: form.userId, roleId: form.roleId }),
+      if (res.ok) {
+        const data = (await res.json()) as { maskedApiKey: string };
+        setMaskedApiKey(data.maskedApiKey ?? maskedApiKey);
+      }
+
+      // 同时加密保存到本地（作为备份/未登录时使用）
+      await saveProviderLocal({
+        providerName: form.providerName,
+        baseUrl: form.baseUrl,
+        apiKey: form.apiKey || "",
+        model: form.model,
       });
-      if (!roleRes.ok) throw new Error(await roleRes.text());
 
-      const providerData = (await providerRes.json()) as { maskedApiKey: string };
-      setMaskedApiKey(providerData.maskedApiKey ?? maskedApiKey);
       setForm((prev) => ({ ...prev, apiKey: "" }));
-      setClientRuntimeContext({ userId: form.userId, roleId: form.roleId });
       setMessage(t("saved"));
       setMessageType("success");
+      setOpen(false)
     } catch (error) {
       setMessage(error instanceof Error ? error.message : t("saveFailed"));
       setMessageType("error");
@@ -172,14 +143,15 @@ export const ProviderSettingsButton: FC = () => {
     setMessageType("");
 
     try {
+      const userId = getClientRuntimeContext().userId;
       const res = await fetch("/api/settings/provider/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          userId: form.userId,
+          userId,
           providerName: form.providerName,
           baseUrl: form.baseUrl,
-          apiKey: form.apiKey,
+          apiKey: form.apiKey || storedApiKey,
           model: form.model,
         }),
       });
@@ -214,24 +186,13 @@ export const ProviderSettingsButton: FC = () => {
       </TooltipIconButton>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="sm:max-w-xl">
+        <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>{t("title")}</DialogTitle>
             <DialogDescription>{t("description")}</DialogDescription>
           </DialogHeader>
 
           <div className="grid gap-3">
-            <label className="grid gap-1.5">
-              <span className="text-xs text-muted-foreground">{t("userId")}</span>
-              <input
-                value={form.userId}
-                onChange={(e) => setForm((p) => ({ ...p, userId: e.target.value }))}
-                className="bg-background border-input h-9 rounded-md border px-2.5 text-sm outline-none"
-                placeholder="demo-user"
-                disabled={disabled}
-              />
-            </label>
-
             <label className="grid gap-1.5">
               <span className="text-xs text-muted-foreground">{t("providerName")}</span>
               <input
@@ -276,22 +237,6 @@ export const ProviderSettingsButton: FC = () => {
                 placeholder="gpt-5.6-luna"
                 disabled={disabled}
               />
-            </label>
-
-            <label className="grid gap-1.5">
-              <span className="text-xs text-muted-foreground">{t("role")}</span>
-              <select
-                value={form.roleId}
-                onChange={(e) => setForm((p) => ({ ...p, roleId: e.target.value }))}
-                className="bg-background border-input h-9 rounded-md border px-2.5 text-sm outline-none"
-                disabled={disabled || roleOptions.length === 0}
-              >
-                {roleOptions.map((role) => (
-                  <option key={role.roleId} value={role.roleId}>
-                    {role.displayName}
-                  </option>
-                ))}
-              </select>
             </label>
 
             {message && (

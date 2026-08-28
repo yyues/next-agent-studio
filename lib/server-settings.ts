@@ -4,7 +4,7 @@ import { connectToMongo } from "@/lib/mongodb";
 import { ProviderConfigModel } from "@/lib/models/provider-config";
 import { RoleProfileModel } from "@/lib/models/role-profile";
 import { UserSettingModel } from "@/lib/models/user-setting";
-import { availableSkillIds, loadSkillsByIds } from "@/lib/skills";
+import { loadSkillsByRoleId, ensureRoleSkillDir, removeRoleSkillDir, getAvailableSkillIds } from "@/lib/skills";
 
 export type ProviderSettings = {
   providerName: string;
@@ -49,16 +49,6 @@ const defaultRoleProfiles: RoleProfile[] = [
     skillIds: ["base", "developer"],
     toolToggles: {},
     priority: 1,
-  },
-  {
-    roleId: "analyst",
-    displayName: "Analyst",
-    enabled: true,
-    systemPrompt:
-      "You are an analyst. Present key findings first and call out uncertainty clearly.",
-    skillIds: ["base", "analyst"],
-    toolToggles: {},
-    priority: 2,
   },
 ];
 
@@ -260,14 +250,14 @@ export async function getRoleSettings(userId: string) {
     return {
       currentRoleId,
       roles,
-      availableSkillIds,
+      availableSkillIds: getAvailableSkillIds(roleId),
     };
   } catch (error) {
     console.warn("Failed to load role settings from MongoDB. Using defaults.", error);
     return {
       currentRoleId: "general",
       roles: defaultRoleProfiles,
-      availableSkillIds,
+      availableSkillIds: getAvailableSkillIds(roleId),
     };
   }
 }
@@ -386,6 +376,9 @@ export async function createRole(
     priority: payload.priority ?? 10,
   });
 
+  // 创建角色对应的 skill 目录
+  ensureRoleSkillDir(payload.roleId);
+
   return toRoleProfile(doc.toObject() as Record<string, unknown>);
 }
 
@@ -435,6 +428,9 @@ export async function deleteRole(userId: string, roleId: string) {
   if (result.deletedCount === 0) {
     throw new Error("Role not found.");
   }
+
+  // 清理角色对应的 skill 目录
+  removeRoleSkillDir(roleId);
 
   return { deleted: true };
 }

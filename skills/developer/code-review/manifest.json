@@ -1,0 +1,7 @@
+{
+  "id": "code-review",
+  "version": "1.0.0",
+  "title": "Code Review",
+  "description": "代码审查技能",
+  "instructions": "instructions.md"
+}
