@@ -15,6 +15,10 @@
   },
   "thread": {
     "welcome": "有什么可以帮你的？",
+    "noThreads": "暂无会话",
+    "newChat": "新对话",
+    "deleteThread": "删除",
+    "roles": "角色",
     "placeholder": "输入消息...",
     "scrollToBottom": "滚动到底部",
     "sendMessage": "发送消息",

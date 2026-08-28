@@ -2,15 +2,14 @@
  * Skills 加载器
  *
  * 核心职责：从 skills/{roleId}/ 目录扫描 skill 包，
- * 读取 manifest.json 和 instructions.md，
+ * 读取 SKILL.md（含 YAML frontmatter 元数据），
  * 返回 SkillModule[] 供 systemPrompt 拼装使用。
  *
  * 目录结构约定：
  *   skills/
  *     {roleId}/
  *       {skillId}/
- *         manifest.json    ← 必须，元数据
- *         instructions.md  ← 必须，核心指令
+ *         SKILL.md         ← 必须，含 frontmatter 元数据 + 指令正文
  *         prompts/         ← 可选，prompt 模板
  *         knowledge/       ← 可选，知识库文档
  */
@@ -58,11 +57,31 @@ function readDirFiles(dirPath: string): string[] {
 }
 
 /**
+ * 解析 SKILL.md 的 YAML frontmatter
+ * 支持 name、title、description、version 等字段
+ */
+function parseFrontmatter(
+  raw: string,
+): { meta: Record<string, string>; body: string } {
+  const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
+  if (!match) return { meta: {}, body: raw };
+
+  const meta: Record<string, string> = {};
+  for (const line of match[1].split("\n")) {
+    const idx = line.indexOf(":");
+    if (idx === -1) continue;
+    const key = line.slice(0, idx).trim();
+    const value = line.slice(idx + 1).trim();
+    if (key) meta[key] = value;
+  }
+  return { meta, body: match[2].trim() };
+}
+
+/**
  * 加载指定角色的所有 skills
  *
  * 扫描 skills/{roleId}/ 下的每个子目录，
- * 读取 manifest.json 获取元数据，
- * 读取 instructions.md 获取指令内容。
+ * 读取 SKILL.md 获取 frontmatter 元数据和指令内容。
  */
 export async function loadSkillsByRoleId(
   roleId: string,
@@ -79,20 +98,14 @@ export async function loadSkillsByRoleId(
 
   for (const skillId of entries) {
     const skillDir = join(roleDir, skillId);
-    const manifestPath = join(skillDir, "manifest.json");
+    const skillMdPath = join(skillDir, "SKILL.md");
 
-    // 跳过没有 manifest.json 的目录
-    if (!existsSync(manifestPath)) continue;
+    // 跳过没有 SKILL.md 的目录
+    if (!existsSync(skillMdPath)) continue;
 
     try {
-      const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
-
-      // 读取核心指令文件
-      const instructionsFile = manifest.instructions || "instructions.md";
-      const instructionsPath = join(skillDir, instructionsFile);
-      const instructions = existsSync(instructionsPath)
-        ? readFileSync(instructionsPath, "utf-8")
-        : "";
+      const raw = readFileSync(skillMdPath, "utf-8");
+      const { meta, body } = parseFrontmatter(raw);
 
       // 可选：读取 prompts/ 目录下的模板文件
       const prompts = readDirFiles(join(skillDir, "prompts"));
@@ -101,12 +114,12 @@ export async function loadSkillsByRoleId(
       const knowledge = readDirFiles(join(skillDir, "knowledge"));
 
       skills.push({
-        id: manifest.id || skillId,
-        title: manifest.title || skillId,
-        instructions,
+        id: meta.name || meta.id || skillId,
+        title: meta.title || meta.name || skillId,
+        instructions: body,
         prompts: prompts.length > 0 ? prompts : undefined,
         knowledge: knowledge.length > 0 ? knowledge : undefined,
-        version: manifest.version,
+        version: meta.version,
       });
     } catch {
       // 跳过解析失败的 skill，不影响其他 skill 加载
@@ -128,7 +141,7 @@ export function getAvailableSkillIds(roleId: string): string[] {
     const fullPath = join(roleDir, name);
     return (
       statSync(fullPath).isDirectory() &&
-      existsSync(join(fullPath, "manifest.json"))
+      existsSync(join(fullPath, "SKILL.md"))
     );
   });
 }

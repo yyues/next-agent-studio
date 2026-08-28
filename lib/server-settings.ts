@@ -4,7 +4,12 @@ import { connectToMongo } from "@/lib/mongodb";
 import { ProviderConfigModel } from "@/lib/models/provider-config";
 import { RoleProfileModel } from "@/lib/models/role-profile";
 import { UserSettingModel } from "@/lib/models/user-setting";
-import { loadSkillsByRoleId, ensureRoleSkillDir, removeRoleSkillDir, getAvailableSkillIds } from "@/lib/skills";
+import {
+  loadSkillsByRoleId,
+  ensureRoleSkillDir,
+  removeRoleSkillDir,
+  getAvailableSkillIds,
+} from "@/lib/skills";
 
 export type ProviderSettings = {
   providerName: string;
@@ -26,7 +31,8 @@ export type RoleProfile = {
 const defaultProviderSettings: ProviderSettings = {
   providerName: process.env.DEFAULT_PROVIDER_NAME ?? "openai-compatible",
   baseUrl: process.env.DEFAULT_PROVIDER_BASE_URL ?? "https://api.openai.com/v1",
-  apiKey: process.env.DEFAULT_PROVIDER_API_KEY ?? process.env.OPENAI_API_KEY ?? "",
+  apiKey:
+    process.env.DEFAULT_PROVIDER_API_KEY ?? process.env.OPENAI_API_KEY ?? "",
   model: process.env.DEFAULT_PROVIDER_MODEL ?? "gpt-5.6-luna",
 };
 
@@ -35,7 +41,8 @@ const defaultRoleProfiles: RoleProfile[] = [
     roleId: "general",
     displayName: "General Assistant",
     enabled: true,
-    systemPrompt: "You are a practical assistant. Keep answers direct and useful.",
+    systemPrompt:
+      "You are a practical assistant. Keep answers direct and useful.",
     skillIds: ["base"],
     toolToggles: {},
     priority: 0,
@@ -67,15 +74,14 @@ export function normalizeUserId(input: unknown) {
   return trimmed.length > 0 ? trimmed : "demo-user";
 }
 
-function toToolToggleObject(
-  value: unknown,
-): Record<string, boolean> {
+function toToolToggleObject(value: unknown): Record<string, boolean> {
   if (!value || typeof value !== "object") {
     return {};
   }
 
   const entries = Object.entries(value as Record<string, unknown>).filter(
-    ([name, enabled]) => typeof name === "string" && typeof enabled === "boolean",
+    ([name, enabled]) =>
+      typeof name === "string" && typeof enabled === "boolean",
   );
 
   return Object.fromEntries(entries) as Record<string, boolean>;
@@ -112,10 +118,13 @@ function validateProviderInput(payload: Partial<ProviderSettings>) {
   }
 }
 
-function normalizeProviderInput(payload: Partial<ProviderSettings>): ProviderSettings {
+function normalizeProviderInput(
+  payload: Partial<ProviderSettings>,
+): ProviderSettings {
   validateProviderInput(payload);
   return {
-    providerName: payload.providerName?.trim() || defaultProviderSettings.providerName,
+    providerName:
+      payload.providerName?.trim() || defaultProviderSettings.providerName,
     baseUrl: payload.baseUrl!.trim(),
     apiKey: payload.apiKey!.trim(),
     model: payload.model!.trim(),
@@ -135,7 +144,7 @@ function buildModel(config: ProviderSettings) {
     apiKey: config.apiKey,
   });
 
-  return provider(config.model);
+  return provider.chat(config.model);
 }
 
 export async function getProviderSettings(userId: string) {
@@ -164,7 +173,10 @@ export async function getProviderSettings(userId: string) {
       maskedApiKey: maskApiKey(saved.apiKey),
     };
   } catch (error) {
-    console.warn("Failed to load provider settings from MongoDB. Using defaults.", error);
+    console.warn(
+      "Failed to load provider settings from MongoDB. Using defaults.",
+      error,
+    );
     return {
       source: "default" as const,
       config: defaultProviderSettings,
@@ -224,16 +236,43 @@ export async function testProviderSettings(payload: Partial<ProviderSettings>) {
   return true;
 }
 
+/**
+ * 将内置角色同步到数据库（首次查询时自动调用）
+ * 对每个内置角色执行 upsert，确保数据库中始终存在默认角色记录
+ */
+async function seedDefaultRoles(userId: string) {
+  for (const role of defaultRoleProfiles) {
+    await RoleProfileModel.findOneAndUpdate(
+      { userId, roleId: role.roleId },
+      {
+        $setOnInsert: {
+          userId,
+          roleId: role.roleId,
+          displayName: role.displayName,
+          enabled: role.enabled,
+          systemPrompt: role.systemPrompt,
+          skillIds: role.skillIds,
+          toolToggles: role.toolToggles,
+          priority: role.priority,
+        },
+      },
+      { upsert: true },
+    );
+  }
+}
 export async function getRoleSettings(userId: string) {
   try {
     await connectToMongo();
+    await seedDefaultRoles(userId);
 
     const userSetting = await UserSettingModel.findOne({ userId }).lean();
-    const dbRoles = (await RoleProfileModel.find({ userId }).lean()).map((doc) =>
-      toRoleProfile(doc as Record<string, unknown>),
+    const dbRoles = (await RoleProfileModel.find({ userId }).lean()).map(
+      (doc) => toRoleProfile(doc as Record<string, unknown>),
     );
 
-    const mergedById = new Map(defaultRoleProfiles.map((role) => [role.roleId, role]));
+    const mergedById = new Map(
+      defaultRoleProfiles.map((role) => [role.roleId, role]),
+    );
     for (const role of dbRoles) {
       mergedById.set(role.roleId, role);
     }
@@ -250,21 +289,26 @@ export async function getRoleSettings(userId: string) {
     return {
       currentRoleId,
       roles,
-      availableSkillIds: getAvailableSkillIds(roleId),
+      availableSkillIds: getAvailableSkillIds(currentRoleId),
     };
   } catch (error) {
-    console.warn("Failed to load role settings from MongoDB. Using defaults.", error);
+    console.warn(
+      "Failed to load role settings from MongoDB. Using defaults.",
+      error,
+    );
     return {
       currentRoleId: "general",
       roles: defaultRoleProfiles,
-      availableSkillIds: getAvailableSkillIds(roleId),
+      availableSkillIds: getAvailableSkillIds("general"),
     };
   }
 }
 
 export async function setCurrentRole(userId: string, roleId: string) {
   const roles = await getRoleSettings(userId);
-  const roleExists = roles.roles.some((role) => role.roleId === roleId && role.enabled);
+  const roleExists = roles.roles.some(
+    (role) => role.roleId === roleId && role.enabled,
+  );
   if (!roleExists) {
     throw new Error("Invalid roleId.");
   }
@@ -289,8 +333,10 @@ export async function resolveRuntimeConfig(input: {
   const provider = input.overrideProvider
     ? normalizeProviderInput({
         providerName:
-          input.overrideProvider.providerName ?? providerFromDb.config.providerName,
-        baseUrl: input.overrideProvider.baseUrl ?? providerFromDb.config.baseUrl,
+          input.overrideProvider.providerName ??
+          providerFromDb.config.providerName,
+        baseUrl:
+          input.overrideProvider.baseUrl ?? providerFromDb.config.baseUrl,
         apiKey: input.overrideProvider.apiKey ?? providerFromDb.config.apiKey,
         model: input.overrideProvider.model ?? providerFromDb.config.model,
       })
@@ -299,7 +345,9 @@ export async function resolveRuntimeConfig(input: {
   const roleSettings = await getRoleSettings(input.userId);
   const roleId =
     input.requestedRoleId &&
-    roleSettings.roles.some((role) => role.roleId === input.requestedRoleId && role.enabled)
+    roleSettings.roles.some(
+      (role) => role.roleId === input.requestedRoleId && role.enabled,
+    )
       ? input.requestedRoleId
       : roleSettings.currentRoleId;
 
@@ -307,10 +355,17 @@ export async function resolveRuntimeConfig(input: {
     roleSettings.roles.find((item) => item.roleId === roleId && item.enabled) ??
     roleSettings.roles[0];
 
-  const validSkillIds = role.skillIds.filter((id) => availableSkillIds.includes(id));
-  const loadedSkills = await loadSkillsByIds(validSkillIds);
+  // const validSkillIds = role.skillIds.filter((id) => availableSkillIds.includes(id));
+  // 按角色加载 skills（从 skills/{roleId}/ 目录扫描）
+  const loadedSkills = await loadSkillsByRoleId(roleId);
   const skillInstruction = loadedSkills
-    .map((skill) => `- ${skill.title}: ${skill.instructions}`)
+    .map((skill) => {
+      let text = `- ${skill.title}: ${skill.instructions}`;
+      if (skill.knowledge && skill.knowledge.length > 0) {
+        text += `\n  参考知识:\n${skill.knowledge.join("\n")}`;
+      }
+      return text;
+    })
     .join("\n");
 
   const systemPrompt = [
@@ -337,7 +392,9 @@ export function filterToolsByRole<T extends Record<string, unknown>>(
     return tools;
   }
 
-  const filteredEntries = Object.entries(tools).filter(([name]) => toolToggles[name] !== false);
+  const filteredEntries = Object.entries(tools).filter(
+    ([name]) => toolToggles[name] !== false,
+  );
   return Object.fromEntries(filteredEntries) as T;
 }
 
@@ -399,8 +456,10 @@ export async function updateRole(
   await connectToMongo();
 
   const update: Record<string, unknown> = {};
-  if (payload.displayName !== undefined) update.displayName = payload.displayName;
-  if (payload.systemPrompt !== undefined) update.systemPrompt = payload.systemPrompt;
+  if (payload.displayName !== undefined)
+    update.displayName = payload.displayName;
+  if (payload.systemPrompt !== undefined)
+    update.systemPrompt = payload.systemPrompt;
   if (payload.enabled !== undefined) update.enabled = payload.enabled;
   if (payload.priority !== undefined) update.priority = payload.priority;
 

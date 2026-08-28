@@ -15,6 +15,10 @@
   },
   "thread": {
     "welcome": "How can I help you today?",
+    "noThreads": "No conversations yet",
+    "newChat": "New Chat",
+    "deleteThread": "Delete",
+    "roles": "Roles",
     "placeholder": "Send a message...",
     "scrollToBottom": "Scroll to bottom",
     "sendMessage": "Send message",
