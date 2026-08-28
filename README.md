@@ -1,8 +1,45 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+This is an [assistant-ui](https://github.com/assistant-ui/assistant-ui) starter customized with:
+
+- Per-user custom provider settings (`baseUrl`, `apiKey`, `model`)
+- Role-based hot-plug skills (dynamic role prompt + skill modules)
+- MongoDB persistence via Mongoose
 
 ## Getting Started
 
-First, run the development server:
+### 1. Configure Environment Variables
+
+Create a `.env.local` file:
+
+```
+OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+MONGODB_URI=mongodb://127.0.0.1:27017/assistant_demo
+
+# Optional defaults if user has no saved provider configuration
+DEFAULT_PROVIDER_NAME=openai-compatible
+DEFAULT_PROVIDER_BASE_URL=https://api.openai.com/v1
+DEFAULT_PROVIDER_MODEL=gpt-5.6-luna
+DEFAULT_PROVIDER_API_KEY=
+```
+
+Notes:
+
+- `MONGODB_URI` is required.
+- If `DEFAULT_PROVIDER_API_KEY` is empty, the server falls back to `OPENAI_API_KEY`.
+- If MongoDB has username/password, use either a full `MONGODB_URI` with auth params or split fields (`MONGODB_USERNAME`, `MONGODB_PASSWORD`, etc.).
+- For special characters in username/password, prefer split fields so the app can safely URL-encode credentials.
+- If both are set: when `MONGODB_URI` has embedded credentials, it wins; otherwise split auth fields are used.
+
+### 2. Install Dependencies
+
+```bash
+npm install
+# or
+yarn install
+# or
+pnpm install
+```
+
+### 3. Run the Development Server
 
 ```bash
 npm run dev
@@ -10,27 +47,47 @@ npm run dev
 yarn dev
 # or
 pnpm dev
-# or
-bun dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Development
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+You can start customizing the UI by modifying components in `components/assistant-ui/`.
 
-## Learn More
+### Provider Configuration UI
 
-To learn more about Next.js, take a look at the following resources:
+- Click the settings icon next to the upload button in the composer.
+- Configure per-user `Provider Name`, `Base URL`, `API Key`, and `Model`.
+- Click `Test` to verify provider connectivity.
+- Click `Save` to persist settings in MongoDB.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### Role-Based Skill Hot Plug
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- In the same settings dialog, select a role.
+- The selected role dynamically changes system instructions and active skills for subsequent chat requests.
+- Built-in skill modules are loaded on demand from `lib/skills/modules/*`.
 
-## Deploy on Vercel
+### API Endpoints
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- `GET /api/settings/provider?userId=...` - get effective provider settings
+- `PUT /api/settings/provider` - upsert provider settings
+- `POST /api/settings/provider/test` - test provider connectivity
+- `GET /api/settings/roles?userId=...` - get current role and available roles
+- `PUT /api/settings/roles` - switch current role
+- `GET /api/health/db` - verify MongoDB connectivity/auth (returns sanitized connection mode)
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+To add more assistant-ui components:
+
+```bash
+npx assistant-ui add
+```
+
+### Key Files
+
+- `app/assistant.tsx` - Sets up the runtime provider
+- `app/api/chat/route.ts` - Chat API endpoint with dynamic provider/role resolution
+- `components/assistant-ui/thread.tsx` - Chat thread component
+- `components/assistant-ui/provider-settings.tsx` - Provider and role settings dialog
+- `lib/server-settings.ts` - Provider/role persistence and runtime resolution
+- `lib/mongodb.ts` - MongoDB connection helper
