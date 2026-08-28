@@ -79,7 +79,10 @@ function makeGenericModel(config: ProviderConfig): Model<Api> {
   } as unknown as Model<Api>;
 }
 
-export function buildModels(config: ProviderConfig): { models: ReturnType<typeof createModels>; model: Model<Api> } {
+export function buildModels(config: ProviderConfig): {
+  models: ReturnType<typeof createModels>;
+  model: Model<Api>;
+} {
   const cacheKey = `${config.baseUrl}::${config.apiKey}::${config.modelId}`;
   const cached = _cache.get(cacheKey);
   if (cached) {
@@ -89,9 +92,7 @@ export function buildModels(config: ProviderConfig): { models: ReturnType<typeof
   // 预定义目录里若已有该模型则复用，否则追加一个通用模型
   const catalog = getOpenRouterModels();
   const exists = catalog.some((m) => m.id === config.modelId);
-  const modelList = exists
-    ? catalog
-    : [makeGenericModel(config), ...catalog];
+  const modelList = exists ? catalog : [makeGenericModel(config), ...catalog];
 
   const models = createModels();
   const provider = createProvider({
@@ -120,7 +121,14 @@ export function restoreMessages(docs: MessageDoc[]): AgentMessage[] {
       content: d.content,
     };
     for (const [k, v] of Object.entries(d)) {
-      if (k === "_id" || k === "conversationId" || k === "userId" || k === "role" || k === "content") continue;
+      if (
+        k === "_id" ||
+        k === "conversationId" ||
+        k === "userId" ||
+        k === "role" ||
+        k === "content"
+      )
+        continue;
       msg[k] = v;
     }
     return msg as unknown as AgentMessage;

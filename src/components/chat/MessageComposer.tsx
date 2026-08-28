@@ -1,9 +1,6 @@
 "use client";
 
-import {
-  ComposerPrimitive,
-  useAuiState,
-} from "@assistant-ui/react";
+import { ComposerPrimitive, useAuiState } from "@assistant-ui/react";
 import { SendIcon, Square, PaperclipIcon, MicIcon } from "lucide-react";
 import { ComposerAttachmentItem } from "@/components/assistant-ui/attachment";
 import type { CSSProperties } from "react";
@@ -26,25 +23,19 @@ export function MessageComposer({ placeholder, startPage }: MessageComposerProps
   const isRunning = useAuiState((s) => s.thread.isRunning);
 
   return (
-    <div
-      className={clsx(
-        "p-1",
-        !startPage && "w-full",
-        startPage && "w-full max-w-[760px]",
-      )}
-    >
+    <div className={clsx("p-1", !startPage && "w-full", startPage && "w-full max-w-[760px]")}>
       <ComposerPrimitive.Root
         className={clsx(
           "mx-auto flex w-full flex-col gap-2 border border-neutral-200 bg-white p-3 transition-colors focus-within:border-neutral-400",
-          startPage ? "rounded-[20px] shadow-[0_8px_32px_-12px_rgba(0,0,0,0.08)]" : "rounded-[24px]",
+          startPage
+            ? "rounded-[20px] shadow-[0_8px_32px_-12px_rgba(0,0,0,0.08)]"
+            : "rounded-[24px]",
         )}
         style={{ ["--composer-radius" as string]: "1.5rem" } as unknown as CSSProperties}
       >
         {/* 附件区域（待发送） */}
         <ComposerPrimitive.Attachments>
-          {({ attachment }) => (
-            <ComposerAttachmentItem attachment={attachment} />
-          )}
+          {({ attachment }) => <ComposerAttachmentItem attachment={attachment} />}
         </ComposerPrimitive.Attachments>
 
         {/* 输入区域 */}
@@ -75,15 +66,11 @@ export function MessageComposer({ placeholder, startPage }: MessageComposerProps
 
           {/* 发送/停止按钮 — 参考 antdx actionNode 圆按钮 */}
           {isRunning ? (
-            <ComposerPrimitive.Cancel
-              className="flex size-9 shrink-0 items-center justify-center rounded-full bg-neutral-900 text-white transition-colors hover:bg-neutral-700"
-            >
+            <ComposerPrimitive.Cancel className="flex size-9 shrink-0 items-center justify-center rounded-full bg-neutral-900 text-white transition-colors hover:bg-neutral-700">
               <Square className="size-4" />
             </ComposerPrimitive.Cancel>
           ) : (
-            <ComposerPrimitive.Send
-              className="flex size-9 shrink-0 items-center justify-center rounded-full bg-neutral-900 text-white transition-colors hover:bg-neutral-700 disabled:opacity-50"
-            >
+            <ComposerPrimitive.Send className="flex size-9 shrink-0 items-center justify-center rounded-full bg-neutral-900 text-white transition-colors hover:bg-neutral-700 disabled:opacity-50">
               <SendIcon className="size-4" />
             </ComposerPrimitive.Send>
           )}

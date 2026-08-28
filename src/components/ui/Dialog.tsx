@@ -12,13 +12,7 @@ interface DialogProps {
 
 // 通用弹窗：遮罩点击关闭 + ESC 关闭 + 阻止背景滚动
 // 修复：用 mousedown/mouseup 追踪，防止滚动内容时 click 逃出弹窗
-export function Dialog({
-  open,
-  onClose,
-  title,
-  children,
-  maxWidth = "max-w-md",
-}: DialogProps) {
+export function Dialog({ open, onClose, title, children, maxWidth = "max-w-md" }: DialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const mouseDownOnOverlay = useRef(false);
 
@@ -57,17 +51,17 @@ export function Dialog({
 
   return (
     <div
-      className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
       onMouseDown={handleOverlayMouseDown}
       onMouseUp={handleOverlayMouseUp}
     >
       <div
         ref={dialogRef}
-        className={`bg-white rounded-xl shadow-lg w-full ${maxWidth} p-5 max-h-[90vh] overflow-y-auto`}
+        className={`w-full rounded-xl bg-white shadow-lg ${maxWidth} max-h-[90vh] overflow-y-auto p-5`}
         onMouseDown={handleDialogMouseDown}
         onClick={(e) => e.stopPropagation()}
       >
-        <h2 className="text-lg font-semibold mb-1">{title}</h2>
+        <h2 className="mb-1 text-lg font-semibold">{title}</h2>
         {children}
       </div>
     </div>

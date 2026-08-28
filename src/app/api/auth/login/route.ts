@@ -30,9 +30,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "邮箱或密码错误" }, { status: 401 });
   }
 
-  const token = await signToken({ sub: user._id, email: user.email });
+  const role = user.role ?? "user";
+  const token = await signToken({ sub: user._id, email: user.email, role });
   const res = NextResponse.json({
-    user: { id: user._id, email: user.email, name: user.name },
+    user: { id: user._id, email: user.email, name: user.name, role },
   });
   res.cookies.set(COOKIE_NAME, token, {
     httpOnly: true,

@@ -27,7 +27,7 @@ export function ConversationSidebar({
   return (
     <aside className="flex h-full w-[280px] shrink-0 flex-col border-r border-neutral-200 bg-neutral-100 px-3">
       {/* Logo 区 — 参考 antdx */}
-      <div className="flex items-center justify-start px-6 py-6 gap-2">
+      <div className="flex items-center justify-start gap-2 px-6 py-6">
         <div className="flex h-6 w-6 items-center justify-center rounded bg-neutral-900 text-white">
           <BotIcon className="size-4" />
         </div>
@@ -55,7 +55,7 @@ export function ConversationSidebar({
             {conversations.map((c) => (
               <li key={c.id}>
                 <div
-                  className={`group flex items-center gap-1 rounded-md px-2 py-2 cursor-pointer text-sm transition-colors hover:bg-neutral-200 ${
+                  className={`group flex cursor-pointer items-center gap-1 rounded-md px-2 py-2 text-sm transition-colors hover:bg-neutral-200 ${
                     activeId === c.id ? "bg-white font-medium shadow-sm" : ""
                   }`}
                   onClick={() => onSelect(c.id)}
@@ -66,7 +66,7 @@ export function ConversationSidebar({
                       e.stopPropagation();
                       onDelete(c.id);
                     }}
-                    className="opacity-0 group-hover:opacity-100 text-neutral-400 hover:text-red-600 px-1"
+                    className="px-1 text-neutral-400 opacity-0 group-hover:opacity-100 hover:text-red-600"
                     title="删除"
                   >
                     ×
@@ -79,14 +79,14 @@ export function ConversationSidebar({
       </div>
 
       {/* 底部 Footer — 参考 antdx sideFooter */}
-      <div className="h-10 my-2 flex items-center justify-between gap-2 border-t border-neutral-300/80 pt-3 px-1">
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium truncate text-neutral-800">{user.name}</p>
-          <p className="text-xs text-neutral-500 truncate">{user.email}</p>
+      <div className="my-2 flex h-10 items-center justify-between gap-2 border-t border-neutral-300/80 px-1 pt-3">
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium text-neutral-800">{user.name}</p>
+          <p className="truncate text-xs text-neutral-500">{user.email}</p>
         </div>
         <button
           onClick={onLogout}
-          className="text-xs text-neutral-500 hover:text-neutral-900 px-2 py-1 rounded border border-neutral-300 hover:border-neutral-400"
+          className="rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-500 hover:border-neutral-400 hover:text-neutral-900"
         >
           退出
         </button>

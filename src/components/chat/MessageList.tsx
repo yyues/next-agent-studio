@@ -28,9 +28,7 @@ export function MessageList() {
 
         <div className="mb-6">
           <ThreadPrimitive.Messages>
-            {({ message }) => (
-              <MessageRenderer message={message} />
-            )}
+            {({ message }) => <MessageRenderer message={message} />}
           </ThreadPrimitive.Messages>
         </div>
 
@@ -62,8 +60,7 @@ function ThreadEmptyState() {
  */
 function MessageRenderer({ message }: { message: ThreadMessage }) {
   const isUser = message.role === "user";
-  const isError =
-    message.status?.type === "incomplete" && message.status?.reason === "error";
+  const isError = message.status?.type === "incomplete" && message.status?.reason === "error";
   const isUpdating = message.status?.type === "running";
   const isRunning = useAuiState((s) => s.thread.isRunning);
 
@@ -72,35 +69,27 @@ function MessageRenderer({ message }: { message: ThreadMessage }) {
       {/* 头像 — assistant 左侧，user 不需要头像 */}
       {!isUser && (
         <div className="flex shrink-0 flex-col items-center pt-1">
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-white border border-neutral-200 shadow-sm text-neutral-700">
+          <div className="flex h-8 w-8 items-center justify-center rounded-full border border-neutral-200 bg-white text-neutral-700 shadow-sm">
             <BotIcon className="size-4" />
           </div>
         </div>
       )}
 
       {/* 消息内容 */}
-      <div
-        className={clsx(
-          "flex min-w-0 flex-1 flex-col",
-          isUser ? "items-end" : "items-start",
-        )}
-      >
+      <div className={clsx("flex min-w-0 flex-1 flex-col", isUser ? "items-end" : "items-start")}>
         <div
           className={clsx(
             "relative max-w-full rounded-2xl px-4 py-2.5",
             // user: antdx end 样式 — 纯色无阴影（右对齐）
-            isUser &&
-              "bg-neutral-900 text-white rounded-br-sm",
+            isUser && "rounded-br-sm bg-neutral-900 text-white",
             // assistant: antdx start 样式 — 白卡+阴影（左对齐）
             !isUser &&
               !isError &&
-              "bg-white text-neutral-900 rounded-bl-sm shadow-sm border border-neutral-100",
+              "rounded-bl-sm border border-neutral-100 bg-white text-neutral-900 shadow-sm",
             // 错误
-            isError && "ring-1 ring-red-300 bg-red-50 text-red-700",
+            isError && "bg-red-50 text-red-700 ring-1 ring-red-300",
             // 流式更新时底部彩色渐变条 (ant-bubble-content-updating)
-            isUpdating &&
-              !isUser &&
-              "ant-bubble-content-updating",
+            isUpdating && !isUser && "ant-bubble-content-updating",
           )}
         >
           <MessagePrimitive.Parts
@@ -119,16 +108,12 @@ function MessageRenderer({ message }: { message: ThreadMessage }) {
           </MessagePrimitive.Attachments>
 
           {/* 错误提示 */}
-          {isError && (
-            <div className="mt-2 text-xs text-red-500">生成失败，请重试</div>
-          )}
+          {isError && <div className="mt-2 text-xs text-red-500">生成失败，请重试</div>}
         </div>
 
         {/* Assistant 消息操作栏 — 参考 antdx Footer（仅完成态显示） */}
         {!isUser && !isRunning && (
-          <ActionBarPrimitive.Root
-            className="mt-1.5 flex items-center gap-1 text-neutral-400"
-          >
+          <ActionBarPrimitive.Root className="mt-1.5 flex items-center gap-1 text-neutral-400">
             <ActionBarPrimitive.Copy className="flex size-6 items-center justify-center rounded hover:bg-neutral-100 hover:text-neutral-600">
               <CopyIcon className="size-3.5" />
             </ActionBarPrimitive.Copy>
@@ -154,7 +139,7 @@ function MessageRenderer({ message }: { message: ThreadMessage }) {
 /** 用户消息文本 - 保持简单纯文本 */
 function UserTextPart() {
   return (
-    <p className="whitespace-pre-wrap break-words text-[15px] leading-relaxed">
+    <p className="text-[15px] leading-relaxed break-words whitespace-pre-wrap">
       <MessagePartPrimitive.Text />
     </p>
   );

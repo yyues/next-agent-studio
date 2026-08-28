@@ -1,0 +1,13 @@
+.next
+node_modules
+dist
+build
+out
+*.log
+.env
+.env.local
+.env.*.local
+coverage
+pnpm-lock.yaml
+package-lock.json
+tsconfig.tsbuildinfo

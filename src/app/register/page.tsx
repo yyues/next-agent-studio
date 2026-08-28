@@ -30,12 +30,12 @@ export default function RegisterPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-neutral-50 px-4">
+    <div className="flex min-h-screen items-center justify-center bg-neutral-50 px-4">
       <div className="w-full max-w-sm">
-        <h1 className="text-2xl font-semibold mb-6 text-center">注册</h1>
+        <h1 className="mb-6 text-center text-2xl font-semibold">注册</h1>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm mb-1 text-neutral-600">昵称（可选）</label>
+            <label className="mb-1 block text-sm text-neutral-600">昵称（可选）</label>
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -44,7 +44,7 @@ export default function RegisterPage() {
             />
           </div>
           <div>
-            <label className="block text-sm mb-1 text-neutral-600">邮箱</label>
+            <label className="mb-1 block text-sm text-neutral-600">邮箱</label>
             <input
               type="email"
               required
@@ -55,7 +55,7 @@ export default function RegisterPage() {
             />
           </div>
           <div>
-            <label className="block text-sm mb-1 text-neutral-600">密码（至少 6 位）</label>
+            <label className="mb-1 block text-sm text-neutral-600">密码（至少 6 位）</label>
             <input
               type="password"
               required
@@ -69,12 +69,12 @@ export default function RegisterPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full rounded-lg bg-neutral-900 text-white py-2 font-medium hover:bg-neutral-800 disabled:opacity-50"
+            className="w-full rounded-lg bg-neutral-900 py-2 font-medium text-white hover:bg-neutral-800 disabled:opacity-50"
           >
             {loading ? "注册中…" : "注册"}
           </button>
         </form>
-        <p className="text-center text-sm text-neutral-500 mt-4">
+        <p className="mt-4 text-center text-sm text-neutral-500">
           已有账号？{" "}
           <Link href="/login" className="text-neutral-900 underline">
             登录

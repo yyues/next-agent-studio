@@ -17,9 +17,7 @@ type MarkdownTextProps = Partial<TextMessagePartProps> & {
   components?: Parameters<typeof memoizeMarkdownComponents>[0];
 };
 
-const useShallowStable = <T extends Record<string, unknown> | undefined>(
-  value: T,
-): T => {
+const useShallowStable = <T extends Record<string, unknown> | undefined>(value: T): T => {
   const ref = useRef(value);
   if (value !== ref.current) {
     const prev = ref.current;
@@ -72,35 +70,23 @@ const defaultComponents = memoizeMarkdownComponents({
   ),
   h5: ({ className, ...props }) => (
     <h5
-      className={cn(
-        "aui-md-h5 mt-3 mb-1 text-sm font-semibold first:mt-0 last:mb-0",
-        className,
-      )}
+      className={cn("aui-md-h5 mt-3 mb-1 text-sm font-semibold first:mt-0 last:mb-0", className)}
       {...props}
     />
   ),
   h6: ({ className, ...props }) => (
     <h6
-      className={cn(
-        "aui-md-h6 mt-3 mb-1 text-sm font-medium first:mt-0 last:mb-0",
-        className,
-      )}
+      className={cn("aui-md-h6 mt-3 mb-1 text-sm font-medium first:mt-0 last:mb-0", className)}
       {...props}
     />
   ),
   p: ({ className, ...props }) => (
-    <p
-      className={cn(
-        "aui-md-p my-3 leading-relaxed first:mt-0 last:mb-0",
-        className,
-      )}
-      {...props}
-    />
+    <p className={cn("aui-md-p my-3 leading-relaxed first:mt-0 last:mb-0", className)} {...props} />
   ),
   a: ({ className, ...props }) => (
     <a
       className={cn(
-        "aui-md-a text-blue-600 hover:text-blue-500 underline underline-offset-2",
+        "aui-md-a text-blue-600 underline underline-offset-2 hover:text-blue-500",
         className,
       )}
       {...props}
@@ -116,22 +102,10 @@ const defaultComponents = memoizeMarkdownComponents({
     />
   ),
   ul: ({ className, ...props }) => (
-    <ul
-      className={cn(
-        "aui-md-ul my-3 ml-5 list-disc [&>li]:mt-1",
-        className,
-      )}
-      {...props}
-    />
+    <ul className={cn("aui-md-ul my-3 ml-5 list-disc [&>li]:mt-1", className)} {...props} />
   ),
   ol: ({ className, ...props }) => (
-    <ol
-      className={cn(
-        "aui-md-ol my-3 ml-5 list-decimal [&>li]:mt-1",
-        className,
-      )}
-      {...props}
-    />
+    <ol className={cn("aui-md-ol my-3 ml-5 list-decimal [&>li]:mt-1", className)} {...props} />
   ),
   hr: ({ className, ...props }) => (
     <hr className={cn("aui-md-hr my-3 border-neutral-200", className)} {...props} />
@@ -157,7 +131,7 @@ const defaultComponents = memoizeMarkdownComponents({
   td: ({ className, ...props }) => (
     <td
       className={cn(
-        "aui-md-td border-neutral-200 border-b border-l px-3 py-1.5 text-left last:border-r",
+        "aui-md-td border-b border-l border-neutral-200 px-3 py-1.5 text-left last:border-r",
         className,
       )}
       {...props}

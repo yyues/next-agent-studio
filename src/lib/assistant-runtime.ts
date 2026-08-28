@@ -132,7 +132,10 @@ export function usePiRuntime(options: RuntimeOptions) {
   const onNew = useCallback(
     async (message: AppendMessage) => {
       const textParts = message.content.filter((p): p is TextMessagePart => p.type === "text");
-      const text = textParts.map((p) => p.text).join("\n").trim();
+      const text = textParts
+        .map((p) => p.text)
+        .join("\n")
+        .trim();
       if (!text) return;
 
       setIsRunning(true);
@@ -249,7 +252,13 @@ export function usePiRuntime(options: RuntimeOptions) {
                 if (last && last.role === "assistant") {
                   next[next.length - 1] = {
                     ...last,
-                    content: [{ type: "text", text: currentText, status: { type: "running" } } as TextMessagePart],
+                    content: [
+                      {
+                        type: "text",
+                        text: currentText,
+                        status: { type: "running" },
+                      } as TextMessagePart,
+                    ],
                   } as ThreadMessage;
                 }
                 return next;
@@ -267,7 +276,13 @@ export function usePiRuntime(options: RuntimeOptions) {
           if (last && last.role === "assistant") {
             next[next.length - 1] = {
               ...last,
-              content: [{ type: "text", text: currentText, status: { type: "complete" } } as TextMessagePart],
+              content: [
+                {
+                  type: "text",
+                  text: currentText,
+                  status: { type: "complete" },
+                } as TextMessagePart,
+              ],
               status: { type: "complete", reason: "stop" },
             } as ThreadMessage;
           }
@@ -284,9 +299,17 @@ export function usePiRuntime(options: RuntimeOptions) {
               next[next.length - 1] = {
                 ...last,
                 content: [
-                  { type: "text", text: currentText, status: { type: "incomplete", reason: "error" } } as TextMessagePart,
+                  {
+                    type: "text",
+                    text: currentText,
+                    status: { type: "incomplete", reason: "error" },
+                  } as TextMessagePart,
                 ],
-                status: { type: "incomplete", reason: "error", error: { message: e instanceof Error ? e.message : "发送失败" } },
+                status: {
+                  type: "incomplete",
+                  reason: "error",
+                  error: { message: e instanceof Error ? e.message : "发送失败" },
+                },
               } as ThreadMessage;
             }
             return next;
@@ -300,7 +323,11 @@ export function usePiRuntime(options: RuntimeOptions) {
               next[next.length - 1] = {
                 ...last,
                 content: [
-                  { type: "text", text: currentText, status: { type: "incomplete", reason: "cancelled" } } as TextMessagePart,
+                  {
+                    type: "text",
+                    text: currentText,
+                    status: { type: "incomplete", reason: "cancelled" },
+                  } as TextMessagePart,
                 ],
                 status: { type: "incomplete", reason: "cancelled" },
               } as ThreadMessage;
@@ -322,12 +349,9 @@ export function usePiRuntime(options: RuntimeOptions) {
     abortRef.current?.abort();
   }, []);
 
-  const onDelete = useCallback(
-    async (messageId: string) => {
-      setMessagesState((prev) => prev.filter((m) => m.id !== messageId));
-    },
-    [],
-  );
+  const onDelete = useCallback(async (messageId: string) => {
+    setMessagesState((prev) => prev.filter((m) => m.id !== messageId));
+  }, []);
 
   const onEdit = useCallback(async (message: AppendMessage) => {
     setMessagesState((prev) =>

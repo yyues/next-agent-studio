@@ -33,17 +33,20 @@ export async function POST(request: NextRequest) {
   const passwordHash = await bcrypt.hash(password, 10);
   const now = new Date();
   const userId = crypto.randomUUID();
+  // 新注册默认 role: "user"，首用户可手动到 MongoDB 改为 admin
+  const role: UserDoc["role"] = "user";
   await db.collection<UserDoc>("users").insertOne({
     _id: userId,
     email,
     name: name || email.split("@")[0],
     passwordHash,
+    role,
     createdAt: now,
   });
 
   const token = await signToken({ sub: userId, email });
   const res = NextResponse.json({
-    user: { id: userId, email, name: name || email.split("@")[0] },
+    user: { id: userId, email, name: name || email.split("@")[0], role },
   });
   res.cookies.set(COOKIE_NAME, token, {
     httpOnly: true,

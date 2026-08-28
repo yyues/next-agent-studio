@@ -59,16 +59,15 @@ export async function POST(request: NextRequest) {
   try {
     providerConfig = await resolveProviderConfigForUser(user?._id, body);
   } catch (e) {
-    return new Response(
-      JSON.stringify({ error: e instanceof Error ? e.message : "配置错误" }),
-      { status: 400, headers: { "content-type": "application/json" } },
-    );
+    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "配置错误" }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    });
   }
 
   // 持久化相关：仅登录用户 + 有效 conversationId 时进行
   const conversationId = body.conversationId;
-  const isPersisted =
-    !!user && !!conversationId && ObjectId.isValid(conversationId);
+  const isPersisted = !!user && !!conversationId && ObjectId.isValid(conversationId);
 
   let conv: ConversationDoc | null = null;
   const db = user ? await getDb() : null;
@@ -110,10 +109,9 @@ export async function POST(request: NextRequest) {
     // 首条消息自动用作会话标题
     if (history.length === 0 && conv.title === "新对话") {
       const title = userText.length > 30 ? userText.slice(0, 30) + "…" : userText;
-      await db.collection<ConversationDoc>("conversations").updateOne(
-        { _id: conv._id },
-        { $set: { title, updatedAt: now } },
-      );
+      await db
+        .collection<ConversationDoc>("conversations")
+        .updateOne({ _id: conv._id }, { $set: { title, updatedAt: now } });
     }
   }
 
@@ -157,10 +155,9 @@ export async function POST(request: NextRequest) {
             content: assistantText,
             createdAt: new Date(),
           });
-          await db.collection<ConversationDoc>("conversations").updateOne(
-            { _id: conv._id },
-            { $set: { updatedAt: new Date() } },
-          );
+          await db
+            .collection<ConversationDoc>("conversations")
+            .updateOne({ _id: conv._id }, { $set: { updatedAt: new Date() } });
         }
         controller.close();
       }

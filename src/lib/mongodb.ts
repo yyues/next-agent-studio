@@ -18,9 +18,7 @@ function buildUri(): string {
   const authSource = process.env.MONGODB_AUTH_SOURCE?.trim() || "admin";
 
   const credentials =
-    user && password
-      ? `${encodeURIComponent(user)}:${encodeURIComponent(password)}@`
-      : "";
+    user && password ? `${encodeURIComponent(user)}:${encodeURIComponent(password)}@` : "";
   // 有认证信息时带上 authSource
   const query = credentials ? `?authSource=${encodeURIComponent(authSource)}` : "";
   return `mongodb://${credentials}${host}:${port}/${query}`;

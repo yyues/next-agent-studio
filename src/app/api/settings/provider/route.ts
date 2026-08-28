@@ -11,7 +11,9 @@ export async function GET() {
     return NextResponse.json({ error: "未登录" }, { status: 401 });
   }
   const db = await getDb();
-  const doc = await db.collection<ProviderSettingDoc>("provider_settings").findOne({ userId: user._id });
+  const doc = await db
+    .collection<ProviderSettingDoc>("provider_settings")
+    .findOne({ userId: user._id });
   if (!doc) {
     return NextResponse.json({ settings: null });
   }

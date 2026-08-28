@@ -3,6 +3,7 @@ export interface UserInfo {
   id: string;
   email: string;
   name: string;
+  role?: "user" | "admin";
 }
 
 export interface PublicConfig {
@@ -101,7 +102,9 @@ export const api = {
     const data = await res.json();
     return data.conversation;
   },
-  async getConversation(id: string): Promise<{ conversation: Conversation; messages: ChatMessage[] }> {
+  async getConversation(
+    id: string,
+  ): Promise<{ conversation: Conversation; messages: ChatMessage[] }> {
     const res = await req(`/api/chat/conversations/${id}`);
     return res.json();
   },
@@ -141,4 +144,170 @@ export const api = {
     });
     return res.json();
   },
+
+  // =================== Admin ===================
+
+  async adminStats(): Promise<AdminStats> {
+    const res = await req("/api/admin/stats");
+    return res.json();
+  },
+
+  async adminListUsers(
+    params: {
+      page?: number;
+      pageSize?: number;
+      keyword?: string;
+    } = {},
+  ): Promise<Paged<AdminUserRow>> {
+    const q = new URLSearchParams();
+    if (params.page) q.set("page", String(params.page));
+    if (params.pageSize) q.set("pageSize", String(params.pageSize));
+    if (params.keyword) q.set("keyword", params.keyword);
+    const res = await req(`/api/admin/users?${q.toString()}`);
+    return res.json();
+  },
+
+  async adminCreateUser(input: {
+    email: string;
+    password: string;
+    name?: string;
+    role?: "user" | "admin";
+  }): Promise<{ ok: boolean; user: AdminUserRow }> {
+    const res = await req("/api/admin/users", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+    return res.json();
+  },
+
+  async adminUpdateUser(
+    id: string,
+    patch: { name?: string; role?: "user" | "admin"; password?: string },
+  ): Promise<{ ok: boolean }> {
+    const res = await req(`/api/admin/users/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    });
+    return res.json();
+  },
+
+  async adminDeleteUser(id: string): Promise<void> {
+    await req(`/api/admin/users/${id}`, { method: "DELETE" });
+  },
+
+  async adminListCustomers(
+    params: {
+      page?: number;
+      pageSize?: number;
+      keyword?: string;
+      status?: string;
+    } = {},
+  ): Promise<Paged<AdminCustomerRow>> {
+    const q = new URLSearchParams();
+    if (params.page) q.set("page", String(params.page));
+    if (params.pageSize) q.set("pageSize", String(params.pageSize));
+    if (params.keyword) q.set("keyword", params.keyword);
+    if (params.status) q.set("status", params.status);
+    const res = await req(`/api/admin/customers?${q.toString()}`);
+    return res.json();
+  },
+
+  async adminCreateCustomer(
+    input: Partial<AdminCustomerForm> & { name: string },
+  ): Promise<{ ok: boolean; id: string }> {
+    const res = await req("/api/admin/customers", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+    return res.json();
+  },
+
+  async adminUpdateCustomer(id: string, patch: AdminCustomerPatch): Promise<{ ok: boolean }> {
+    const res = await req(`/api/admin/customers/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    });
+    return res.json();
+  },
+
+  async adminDeleteCustomer(id: string): Promise<void> {
+    await req(`/api/admin/customers/${id}`, { method: "DELETE" });
+  },
 };
+
+// ========= Admin 相关类型 =========
+export interface Paged<T> {
+  total: number;
+  page: number;
+  pageSize: number;
+  list: T[];
+}
+
+export interface AdminUserRow {
+  id: string;
+  email: string;
+  name: string;
+  role: "user" | "admin";
+  createdAt: string | Date;
+}
+
+export type CustomerStatusType = "active" | "trial" | "expired" | "disabled";
+
+export interface AdminCustomerRow {
+  id: string;
+  name: string;
+  email?: string | null;
+  phone?: string | null;
+  remark?: string | null;
+  status: CustomerStatusType;
+  expireAt?: string | Date | null;
+  linkedUserId?: string | null;
+  createdAt: string | Date;
+  updatedAt: string | Date;
+}
+
+export interface AdminCustomerForm {
+  name: string;
+  email?: string;
+  phone?: string;
+  remark?: string;
+  status?: CustomerStatusType;
+  trialDays?: number;
+  expireAt?: string | null;
+  linkedUserId?: string | null;
+}
+
+export interface AdminCustomerPatch {
+  name?: string;
+  email?: string;
+  phone?: string;
+  remark?: string;
+  status?: CustomerStatusType;
+  linkedUserId?: string | null;
+  expireAt?: string | null;
+  extendDays?: number;
+  trialDays?: number;
+}
+
+export interface AdminStats {
+  overview: {
+    totalUsers: number;
+    totalAdmins: number;
+    totalConversations: number;
+    totalMessages: number;
+    totalCustomers: number;
+    activeCustomers: number;
+    trialCustomers: number;
+  };
+  today: {
+    users: number;
+    conversations: number;
+    messages: number;
+  };
+  trend: {
+    days: string[];
+    users: number[];
+    conversations: number[];
+    messages: number[];
+  };
+}

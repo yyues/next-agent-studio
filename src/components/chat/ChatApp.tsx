@@ -41,6 +41,8 @@ export function ChatApp({ user, initialConfig }: Props) {
   const [pendingMessages, setPendingMessages] = useState<ChatMessage[]>([]);
   // 新建会话计数器，用于生成 runtimeKey
   const [newConvCount, setNewConvCount] = useState(0);
+  // 会话切换计数（侧边栏切换才递增；runtime 自动创建会话不递增，避免重建 runtime 导致消息闪退）
+  const [switchCount, setSwitchCount] = useState(0);
 
   // 已保存的配置标志（DB 或游客临时）；游客构造展示用对象
   const effectiveSettings: ProviderSettings | null = user
@@ -58,12 +60,9 @@ export function ChatApp({ user, initialConfig }: Props) {
       : null;
   const hasProvider = !!effectiveSettings || initialConfig.hasDefaultProvider;
 
-  // runtime key：切换会话时变化，强制重建 runtime
-  const runtimeKey = isGuest
-    ? "guest"
-    : activeId
-      ? activeId
-      : `new-${newConvCount}`;
+  // runtime key：仅在「新建会话按钮」「侧边栏切换」「游客→非游客」等情况下重建
+  //   - runtime 内部自动创建会话（handleConversationCreated）不会触发重建，避免消息"闪退"
+  const runtimeKey = isGuest ? "guest" : `s${switchCount}-${activeId ?? `new-${newConvCount}`}`;
 
   // 初始化：加载会话列表和 provider 设置
   useEffect(() => {
@@ -73,7 +72,10 @@ export function ChatApp({ user, initialConfig }: Props) {
         .then(setSavedSettings)
         .catch(() => {})
         .finally(() => setLoadingConvos(false));
-      api.listConversations().then(setConversations).catch(() => {});
+      api
+        .listConversations()
+        .then(setConversations)
+        .catch(() => {});
     } else {
       setLoadingConvos(false);
     }
@@ -82,6 +84,7 @@ export function ChatApp({ user, initialConfig }: Props) {
   // 切换会话
   const selectConversation = useCallback(async (id: string) => {
     setActiveId(id);
+    setSwitchCount((c) => c + 1);
     setLoadingMsgs(true);
     setError("");
     try {
@@ -103,6 +106,7 @@ export function ChatApp({ user, initialConfig }: Props) {
       setActiveId(conv.id);
       setPendingMessages([]);
       setNewConvCount((c) => c + 1);
+      setSwitchCount((c) => c + 1);
       setError("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "新建会话失败");
@@ -121,6 +125,7 @@ export function ChatApp({ user, initialConfig }: Props) {
           setActiveId(null);
           setPendingMessages([]);
           setNewConvCount((c) => c + 1);
+          setSwitchCount((c) => c + 1);
         }
       } catch (e) {
         setError(e instanceof Error ? e.message : "删除失败");
@@ -144,7 +149,10 @@ export function ChatApp({ user, initialConfig }: Props) {
   // 会话列表刷新回调（每次流完成后触发）
   const handleConversationsChanged = useCallback(() => {
     if (user) {
-      api.listConversations().then(setConversations).catch(() => {});
+      api
+        .listConversations()
+        .then(setConversations)
+        .catch(() => {});
     }
   }, [user]);
 
@@ -207,12 +215,12 @@ export function ChatApp({ user, initialConfig }: Props) {
       {/* 参考 antdx chat: w-[calc(100%-240px)] flex-col overflow-auto box-sizing */}
       <main
         className={clsx(
-          "flex min-h-0 flex-col box-border",
+          "box-border flex min-h-0 flex-col",
           user ? "w-[calc(100%-280px)]" : "w-full",
         )}
       >
         {/* 顶部状态栏 — 保留功能 */}
-        <div className="shrink-0 border-b border-neutral-200 px-4 py-2 flex items-center gap-3 bg-white">
+        <div className="flex shrink-0 items-center gap-3 border-b border-neutral-200 bg-white px-4 py-2">
           <div className="flex-1 text-sm text-neutral-500">
             {isGuest ? (
               <span>
@@ -228,7 +236,7 @@ export function ChatApp({ user, initialConfig }: Props) {
           </div>
           <button
             onClick={() => setSettingsOpen(true)}
-            className="text-xs text-neutral-600 hover:text-neutral-900 px-2 py-1 rounded border border-neutral-300"
+            className="rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-600 hover:text-neutral-900"
           >
             {effectiveSettings ? "API 配置 ✓" : "API 设置"}
           </button>
@@ -257,22 +265,22 @@ export function ChatApp({ user, initialConfig }: Props) {
         )}
 
         {error && (
-          <div className="mx-auto w-full px-4 shrink-0" style={{ maxWidth: 940 }}>
+          <div className="mx-auto w-full shrink-0 px-4" style={{ maxWidth: 940 }}>
             <p className="mb-2 text-sm text-red-600">{error}</p>
           </div>
         )}
       </main>
 
-      {settingsOpen && (
-        <ProviderSettingsDialog
-          user={user}
-          initialConfig={initialConfig}
-          savedSettings={effectiveSettings}
-          onClose={() => setSettingsOpen(false)}
-          onSaved={handleSettingsSaved}
-          onCleared={handleSettingsCleared}
-        />
-      )}
+      {/* Antd Modal 自带 open 控制，不需要条件渲染（保证 destroyOnHidden 生效） */}
+      <ProviderSettingsDialog
+        user={user}
+        initialConfig={initialConfig}
+        savedSettings={effectiveSettings}
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onSaved={handleSettingsSaved}
+        onCleared={handleSettingsCleared}
+      />
     </div>
   );
 }
@@ -330,17 +338,14 @@ function ChatLayoutInner({ placeholder }: { placeholder: string }) {
     <div className="mx-auto flex min-h-0 w-full flex-1 flex-col" style={{ maxWidth: 940 }}>
       {/* 参考 antdx chatList: flex-1 overflow-y-auto margin-block-start */}
       {hasMessages && (
-        <div className="flex min-h-0 flex-1 flex-col mt-4">
+        <div className="mt-4 flex min-h-0 flex-1 flex-col">
           <MessageList />
         </div>
       )}
 
       {/* 参考 antdx chatSender: padding-xs；空消息时 startPage: flex-col items-center h-full */}
       <div
-        className={clsx(
-          "p-1 shrink-0",
-          !hasMessages && "flex h-full flex-1 flex-col items-center",
-        )}
+        className={clsx("shrink-0 p-1", !hasMessages && "flex h-full flex-1 flex-col items-center")}
       >
         {!hasMessages && (
           // 参考 antdx agentName: margin-block-start 25% font-size 32px mb 38px font-semibold
