@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   api,
   type Conversation,
@@ -13,6 +13,9 @@ import { ConversationSidebar } from "@/components/chat/ConversationSidebar";
 import { MessageList } from "@/components/chat/MessageList";
 import { MessageComposer } from "@/components/chat/MessageComposer";
 import { ProviderSettingsDialog } from "@/components/settings/ProviderSettingsDialog";
+import { AssistantRuntimeProvider, useAuiState } from "@assistant-ui/react";
+import { usePiRuntime } from "@/lib/assistant-runtime";
+import { clsx } from "clsx";
 
 interface Props {
   user: UserInfo | null;
@@ -23,9 +26,6 @@ export function ChatApp({ user, initialConfig }: Props) {
   const isGuest = !user;
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState("");
-  const [sending, setSending] = useState(false);
   const [loadingConvos, setLoadingConvos] = useState(true);
   const [loadingMsgs, setLoadingMsgs] = useState(false);
   const [error, setError] = useState("");
@@ -37,8 +37,10 @@ export function ChatApp({ user, initialConfig }: Props) {
     baseUrl: string;
     model: string;
   } | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  // 切换会话时加载的历史消息，传递给 runtime
+  const [pendingMessages, setPendingMessages] = useState<ChatMessage[]>([]);
+  // 新建会话计数器，用于生成 runtimeKey
+  const [newConvCount, setNewConvCount] = useState(0);
 
   // 已保存的配置标志（DB 或游客临时）；游客构造展示用对象
   const effectiveSettings: ProviderSettings | null = user
@@ -56,7 +58,14 @@ export function ChatApp({ user, initialConfig }: Props) {
       : null;
   const hasProvider = !!effectiveSettings || initialConfig.hasDefaultProvider;
 
-  // 初始化
+  // runtime key：切换会话时变化，强制重建 runtime
+  const runtimeKey = isGuest
+    ? "guest"
+    : activeId
+      ? activeId
+      : `new-${newConvCount}`;
+
+  // 初始化：加载会话列表和 provider 设置
   useEffect(() => {
     if (user) {
       api
@@ -70,207 +79,118 @@ export function ChatApp({ user, initialConfig }: Props) {
     }
   }, [user]);
 
-  // 自动滚到底
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [messages]);
-
-  async function selectConversation(id: string) {
-    if (sending) return;
+  // 切换会话
+  const selectConversation = useCallback(async (id: string) => {
     setActiveId(id);
     setLoadingMsgs(true);
     setError("");
     try {
       const data = await api.getConversation(id);
-      setMessages(data.messages);
+      setPendingMessages(data.messages);
     } catch (e) {
       setError(e instanceof Error ? e.message : "加载消息失败");
     } finally {
       setLoadingMsgs(false);
     }
-  }
+  }, []);
 
-  async function newConversation() {
-    if (sending || !user) return;
+  // 新建会话
+  const newConversation = useCallback(async () => {
+    if (!user) return;
     try {
       const conv = await api.createConversation();
       setConversations((prev) => [conv, ...prev]);
       setActiveId(conv.id);
-      setMessages([]);
+      setPendingMessages([]);
+      setNewConvCount((c) => c + 1);
+      setError("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "新建会话失败");
     }
-  }
+  }, [user]);
 
-  async function deleteConversation(id: string) {
-    if (sending || !user) return;
-    if (!confirm("确定删除这个会话？")) return;
-    try {
-      await api.deleteConversation(id);
-      setConversations((prev) => prev.filter((c) => c.id !== id));
-      if (activeId === id) {
-        setActiveId(null);
-        setMessages([]);
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "删除失败");
-    }
-  }
-
-  // 发送消息（SSE 流式）
-  async function send() {
-    const text = input.trim();
-    if (!text || sending) return;
-
-    let convId = activeId;
-    if (user && !convId) {
+  // 删除会话
+  const deleteConversation = useCallback(
+    async (id: string) => {
+      if (!user) return;
+      if (!confirm("确定删除这个会话？")) return;
       try {
-        const conv = await api.createConversation();
-        setConversations((prev) => [conv, ...prev]);
-        setActiveId(conv.id);
-        convId = conv.id;
+        await api.deleteConversation(id);
+        setConversations((prev) => prev.filter((c) => c.id !== id));
+        if (activeId === id) {
+          setActiveId(null);
+          setPendingMessages([]);
+          setNewConvCount((c) => c + 1);
+        }
       } catch (e) {
-        setError(e instanceof Error ? e.message : "新建会话失败");
-        return;
+        setError(e instanceof Error ? e.message : "删除失败");
       }
+    },
+    [activeId, user],
+  );
+
+  // 创建新会话（供 runtime 自动创建使用）
+  const handleCreateConversation = useCallback(async () => {
+    const conv = await api.createConversation();
+    setConversations((prev) => [conv, ...prev]);
+    return conv.id;
+  }, []);
+
+  // 会话创建回调（runtime 自动创建后通知）
+  const handleConversationCreated = useCallback((convId: string) => {
+    setActiveId(convId);
+  }, []);
+
+  // 会话列表刷新回调（每次流完成后触发）
+  const handleConversationsChanged = useCallback(() => {
+    if (user) {
+      api.listConversations().then(setConversations).catch(() => {});
     }
+  }, [user]);
 
-    setInput("");
-    setSending(true);
-    setError("");
-
-    const userMsg: ChatMessage = { role: "user", content: text };
-    const assistantMsg: ChatMessage = { role: "assistant", content: "" };
-    setMessages((prev) => [...prev, userMsg, assistantMsg]);
-
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    try {
-      const res = await fetch("/api/chat/stream", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          conversationId: convId,
-          message: text,
-          ...(isGuest && guestConfig
-            ? {
-                apiKey: guestConfig.apiKey,
-                baseUrl: guestConfig.baseUrl,
-                model: guestConfig.model,
-              }
-            : {}),
-        }),
-        signal: controller.signal,
-      });
-      if (!res.ok || !res.body) {
-        let msg = `请求失败 (${res.status})`;
-        try {
-          const d = await res.json();
-          if (d?.error) msg = d.error;
-        } catch {
-          // ignore
-        }
-        throw new Error(msg);
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const parts = buffer.split("\n\n");
-        buffer = parts.pop() ?? "";
-        for (const part of parts) {
-          const lines = part.split("\n");
-          let eventType = "message";
-          let dataStr = "";
-          for (const line of lines) {
-            if (line.startsWith("event: ")) eventType = line.slice(7);
-            else if (line.startsWith("data: ")) dataStr = line.slice(6);
-          }
-          if (!dataStr) continue;
-          let data: unknown;
-          try {
-            data = JSON.parse(dataStr);
-          } catch {
-            continue;
-          }
-          const d = data as { delta?: string; content?: string; error?: string };
-
-          if (eventType === "delta" && typeof d.delta === "string") {
-            setMessages((prev) => {
-              const next = [...prev];
-              const last = next[next.length - 1];
-              if (last && last.role === "assistant") {
-                next[next.length - 1] = {
-                  ...last,
-                  content:
-                    (typeof last.content === "string" ? last.content : "") +
-                    d.delta,
-                };
-              }
-              return next;
-            });
-          } else if (eventType === "error") {
-            setError(d.error ?? "生成失败");
-          }
-        }
-      }
-    } catch (e) {
-      if ((e as Error).name !== "AbortError") {
-        setError(e instanceof Error ? e.message : "发送失败");
-      }
-    } finally {
-      setSending(false);
-      abortRef.current = null;
-      if (user) {
-        api.listConversations().then(setConversations).catch(() => {});
-      }
-    }
-  }
-
-  function stop() {
-    abortRef.current?.abort();
-  }
-
-  async function handleLogout() {
+  // 登出
+  const handleLogout = useCallback(async () => {
     await api.logout();
     window.location.href = "/login";
-  }
+  }, []);
 
-  function handleSettingsSaved(settings: ProviderSettings & { apiKey?: string }) {
-    if (user) {
-      setSavedSettings(settings);
-    } else {
-      setGuestConfig({
-        apiKey: settings.apiKey ?? "",
-        baseUrl: settings.baseUrl,
-        model: settings.model,
-      });
-    }
-    setSettingsOpen(false);
-  }
+  // 保存设置
+  const handleSettingsSaved = useCallback(
+    (settings: ProviderSettings & { apiKey?: string }) => {
+      if (user) {
+        setSavedSettings(settings);
+      } else {
+        setGuestConfig({
+          apiKey: settings.apiKey ?? "",
+          baseUrl: settings.baseUrl,
+          model: settings.model,
+        });
+      }
+      setSettingsOpen(false);
+    },
+    [user],
+  );
 
-  function handleSettingsCleared() {
+  // 清除设置
+  const handleSettingsCleared = useCallback(() => {
     if (user) {
       setSavedSettings(null);
     } else {
       setGuestConfig(null);
     }
     setSettingsOpen(false);
-  }
+  }, [user]);
 
-  // 计算空状态类型
-  const emptyState: "guest-empty" | "no-conversation" | "no-messages" =
-    !user ? "guest-empty" : !activeId ? "no-conversation" : "no-messages";
+  // Composer placeholder
+  const composerPlaceholder = !hasProvider
+    ? "请先在「API 设置」中填写配置"
+    : user && !activeId
+      ? "点击新对话后开始聊天"
+      : "输入消息，Enter 发送，Shift+Enter 换行";
 
   return (
-    <div className="flex h-screen">
+    // 参考 antdx layout: w-full h-screen flex bg-container overflow-hidden
+    <div className="flex h-screen w-full overflow-hidden bg-white">
       {user && (
         <ConversationSidebar
           user={user}
@@ -284,8 +204,15 @@ export function ChatApp({ user, initialConfig }: Props) {
         />
       )}
 
-      <main className="flex-1 flex flex-col min-w-0">
-        <div className="border-b border-neutral-200 px-4 py-2 flex items-center gap-3">
+      {/* 参考 antdx chat: w-[calc(100%-240px)] flex-col overflow-auto box-sizing */}
+      <main
+        className={clsx(
+          "flex min-h-0 flex-col box-border",
+          user ? "w-[calc(100%-280px)]" : "w-full",
+        )}
+      >
+        {/* 顶部状态栏 — 保留功能 */}
+        <div className="shrink-0 border-b border-neutral-200 px-4 py-2 flex items-center gap-3 bg-white">
           <div className="flex-1 text-sm text-neutral-500">
             {isGuest ? (
               <span>
@@ -309,39 +236,31 @@ export function ChatApp({ user, initialConfig }: Props) {
 
         {loadingMsgs ? (
           <div className="flex-1 overflow-y-auto">
-            <div className="p-6 text-neutral-400">加载消息中…</div>
+            <div className="mx-auto p-6" style={{ maxWidth: 940 }}>
+              <p className="text-neutral-400">加载消息中…</p>
+            </div>
           </div>
         ) : (
-          <MessageList
-            ref={scrollRef}
-            messages={messages}
-            sending={sending}
-            emptyState={emptyState}
+          <ChatRuntimeWrapper
+            key={runtimeKey}
+            conversationId={activeId}
+            isGuest={isGuest}
+            guestConfig={guestConfig}
+            initialMessages={pendingMessages}
             hasProvider={hasProvider}
+            onCreateConversation={handleCreateConversation}
+            onConversationCreated={handleConversationCreated}
+            onConversationsChanged={handleConversationsChanged}
+            onError={setError}
+            composerPlaceholder={composerPlaceholder}
           />
         )}
 
         {error && (
-          <div className="max-w-3xl mx-auto w-full px-4">
-            <p className="text-sm text-red-600 mb-2">{error}</p>
+          <div className="mx-auto w-full px-4 shrink-0" style={{ maxWidth: 940 }}>
+            <p className="mb-2 text-sm text-red-600">{error}</p>
           </div>
         )}
-
-        <MessageComposer
-          value={input}
-          onChange={setInput}
-          onSend={send}
-          onStop={stop}
-          sending={sending}
-          disabled={!input.trim() || !hasProvider}
-          placeholder={
-            !hasProvider
-              ? "请先在「API 设置」中填写配置"
-              : user && !activeId
-                ? "点击新对话后开始聊天"
-                : "输入消息，Enter 发送，Shift+Enter 换行"
-          }
-        />
       </main>
 
       {settingsOpen && (
@@ -354,6 +273,86 @@ export function ChatApp({ user, initialConfig }: Props) {
           onCleared={handleSettingsCleared}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * 内部组件：包装 AssistantRuntimeProvider
+ * 通过 key 属性在切换会话时强制重建 runtime
+ *
+ * 参考 antdx 空页/有消息页两种布局：
+ * - 空页: chatSender 变 startPage（整体居中 + 大标题 agentName）
+ * - 有消息: chatList flex1 scroll + chatSender 固定底部
+ */
+interface ChatRuntimeWrapperProps {
+  conversationId: string | null;
+  isGuest: boolean;
+  guestConfig: { apiKey: string; baseUrl: string; model: string } | null;
+  initialMessages: ChatMessage[];
+  hasProvider: boolean;
+  onCreateConversation: () => Promise<string>;
+  onConversationCreated: (convId: string) => void;
+  onConversationsChanged: () => void;
+  onError: (error: string) => void;
+  composerPlaceholder: string;
+}
+
+function ChatRuntimeWrapper(props: ChatRuntimeWrapperProps) {
+  const runtime = usePiRuntime({
+    conversationId: props.conversationId,
+    isGuest: props.isGuest,
+    guestConfig: props.guestConfig,
+    initialMessages: props.initialMessages,
+    hasProvider: props.hasProvider,
+    onCreateConversation: props.onCreateConversation,
+    onConversationCreated: props.onConversationCreated,
+    onConversationsChanged: props.onConversationsChanged,
+    onError: props.onError,
+  });
+
+  return (
+    <AssistantRuntimeProvider runtime={runtime}>
+      <ChatLayoutInner placeholder={props.composerPlaceholder} />
+    </AssistantRuntimeProvider>
+  );
+}
+
+/**
+ * 内层：运行在 runtime 上下文内，可直接读取 useAuiState 判定是否有消息
+ */
+function ChatLayoutInner({ placeholder }: { placeholder: string }) {
+  // 参考 antdx: messages.length===0 时使用 startPage 布局
+  const messagesLength = useAuiState((s) => s.thread.messages.length);
+  const hasMessages = messagesLength > 0;
+
+  return (
+    <div className="mx-auto flex min-h-0 w-full flex-1 flex-col" style={{ maxWidth: 940 }}>
+      {/* 参考 antdx chatList: flex-1 overflow-y-auto margin-block-start */}
+      {hasMessages && (
+        <div className="flex min-h-0 flex-1 flex-col mt-4">
+          <MessageList />
+        </div>
+      )}
+
+      {/* 参考 antdx chatSender: padding-xs；空消息时 startPage: flex-col items-center h-full */}
+      <div
+        className={clsx(
+          "p-1 shrink-0",
+          !hasMessages && "flex h-full flex-1 flex-col items-center",
+        )}
+      >
+        {!hasMessages && (
+          // 参考 antdx agentName: margin-block-start 25% font-size 32px mb 38px font-semibold
+          <div
+            className="font-semibold text-neutral-900"
+            style={{ marginTop: "25%", fontSize: "32px", marginBottom: "38px" }}
+          >
+            Agent Demo
+          </div>
+        )}
+        <MessageComposer placeholder={placeholder} startPage={!hasMessages} />
+      </div>
     </div>
   );
 }
