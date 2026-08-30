@@ -1,29 +1,27 @@
 /**
  * Resources 目录管理
  *
- * 职责：管理 resources/{roleId}/ 目录的创建和删除。
- * RAG 资料 zip 包解压到此目录，供后续检索使用。
+ * 生产环境（Vercel）文件系统只读，RAG 资料文件改存 Vercel Blob。
+ * 元数据存 MongoDB（RoleResource），文件存 Blob，路径前缀 resources/{roleId}/{resourceId}/
  */
-import { existsSync, mkdirSync, rmSync } from "fs";
-import { join, resolve } from "path";
+import { connectToMongo } from "@/lib/mongodb";
+import { RoleResourceModel } from "@/lib/models/role-resource";
+import { blobListPathnames, blobDel } from "@/lib/blob";
 
-const RESOURCES_ROOT = resolve(process.cwd(), "resources");
-
-export function getRoleResourceDir(roleId: string): string {
-  return join(RESOURCES_ROOT, roleId);
-}
-
-export function ensureRoleResourceDir(roleId: string): string {
-  const dir = join(RESOURCES_ROOT, roleId);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
+/**
+ * 删除角色的所有上传 resource：清理 Vercel Blob + MongoDB 记录。
+ */
+export async function removeRoleResourceDir(roleId: string): Promise<void> {
+  try {
+    await connectToMongo();
+    await RoleResourceModel.deleteMany({ roleId });
+  } catch {
+    // 数据库清理失败不阻断
   }
-  return dir;
-}
-
-export function removeRoleResourceDir(roleId: string): void {
-  const dir = join(RESOURCES_ROOT, roleId);
-  if (existsSync(dir)) {
-    rmSync(dir, { recursive: true, force: true });
+  try {
+    const pathnames = await blobListPathnames(`resources/${roleId}/`);
+    if (pathnames.length > 0) await blobDel(pathnames);
+  } catch {
+    // Blob 清理失败不阻断
   }
 }

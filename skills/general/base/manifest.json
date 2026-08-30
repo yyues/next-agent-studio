@@ -1,7 +1,0 @@
-{
-  "id": "base",
-  "version": "1.0.0",
-  "title": "Base Assistant",
-  "description": "通用基础助手技能",
-  "instructions": "instructions.md"
-}

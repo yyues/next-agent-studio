@@ -1,24 +1,19 @@
 /**
  * GET  /api/settings/roles/[roleId]/resources — 列出该角色所有 RAG 资料
  * POST /api/settings/roles/[roleId]/resources — 上传资料 zip 包
+ *
+ * 上传（Vercel Blob 方案，文件不落本地磁盘）：
+ * 1. 内存解压 zip
+ * 2. 计算 MD5 去重
+ * 3. 逐文件 put 到 resources/{roleId}/{resourceId}/{entryName}
+ * 4. 元数据（fileName/md5/blobPrefix）存 MongoDB
  */
 import { NextResponse } from "next/server";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  statSync,
-  writeFileSync,
-} from "fs";
-import { join, resolve, basename } from "path";
 import { createHash } from "crypto";
 import AdmZip from "adm-zip";
 import { connectToMongo } from "@/lib/mongodb";
 import { RoleResourceModel } from "@/lib/models/role-resource";
-import { ensureRoleResourceDir } from "@/lib/resources";
-
-const RESOURCES_ROOT = resolve(process.cwd(), "resources");
+import { blobPut, blobListPathnames, blobDel } from "@/lib/blob";
 
 function sanitizeName(name: string): string {
   return name
@@ -81,15 +76,15 @@ export async function POST(
     }
 
     const resourceId = sanitizeName(file.name);
-    const roleDir = ensureRoleResourceDir(roleId);
-    const targetDir = join(roleDir, resourceId);
+    const blobPrefix = `resources/${roleId}/${resourceId}/`;
 
-    // 如果同名目录已存在，先清理
-    if (existsSync(targetDir)) {
-      const { rmSync } = require("fs");
-      rmSync(targetDir, { recursive: true, force: true });
+    // 同名资源先清理旧 blob（保持覆盖上传的干净状态）
+    try {
+      const oldPathnames = await blobListPathnames(blobPrefix);
+      if (oldPathnames.length > 0) await blobDel(oldPathnames);
+    } catch {
+      // 旧 blob 不存在则忽略
     }
-    mkdirSync(targetDir, { recursive: true });
 
     const zip = new AdmZip(zipBuffer);
     const entries = zip.getEntries();
@@ -102,22 +97,14 @@ export async function POST(
         : null;
 
     for (const entry of entries) {
+      if (entry.isDirectory) continue;
       const entryName = rootPrefix
         ? entry.entryName.startsWith(rootPrefix)
           ? entry.entryName.slice(rootPrefix.length)
           : entry.entryName
         : entry.entryName;
-
       if (!entryName) continue;
-
-      const fullPath = join(targetDir, entryName);
-      if (entry.isDirectory) {
-        mkdirSync(fullPath, { recursive: true });
-      } else {
-        const parentDir = fullPath.substring(0, fullPath.lastIndexOf("/"));
-        if (!existsSync(parentDir)) mkdirSync(parentDir, { recursive: true });
-        writeFileSync(fullPath, entry.getData());
-      }
+      await blobPut(blobPrefix + entryName, entry.getData());
     }
 
     await RoleResourceModel.findOneAndUpdate(
@@ -128,6 +115,7 @@ export async function POST(
         fileName: file.name,
         md5,
         filePath: `resources/${roleId}/${resourceId}`,
+        blobPrefix,
       },
       { upsert: true, new: true, setDefaultsOnInsert: true },
     );

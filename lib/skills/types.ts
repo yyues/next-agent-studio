@@ -7,6 +7,8 @@
 export type SkillModule = {
   id: string;
   title: string;
+  /** 可选：skill 描述，用于详情页展示 */
+  description?: string;
   /** 核心指令，注入 systemPrompt */
   instructions: string;
   /** 可选：prompt 模板列表 */

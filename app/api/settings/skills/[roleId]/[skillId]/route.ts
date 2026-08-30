@@ -3,16 +3,12 @@
  *
  * 删除指定角色下的某个 skill 包：
  * 1. 从 MongoDB 删除元数据记录
- * 2. 删除 skills/{roleId}/{skillId}/ 目录及内容
- * 3. 检查是否有其他角色引用该 skill（仅提示，不阻断）
+ * 2. 删除 Vercel Blob 中该 skill 前缀下的所有解压文件
  */
 import { NextResponse } from "next/server";
-import { existsSync } from "fs";
-import { join, resolve } from "path";
 import { connectToMongo } from "@/lib/mongodb";
 import { SkillDocModel } from "@/lib/models/skill-doc";
-
-const SKILLS_ROOT = resolve(process.cwd(), "skills");
+import { blobDel, blobListPathnames } from "@/lib/blob";
 
 export async function DELETE(
   _req: Request,
@@ -23,16 +19,19 @@ export async function DELETE(
 
     // 1. 删除数据库记录
     await connectToMongo();
-    const result = await SkillDocModel.deleteOne({ roleId, skillId });
-    if (result.deletedCount === 0) {
+    const doc = await SkillDocModel.findOneAndDelete({ roleId, skillId }).lean();
+    if (!doc) {
       return NextResponse.json({ error: "Skill not found." }, { status: 404 });
     }
 
-    // 2. 删除文件目录
-    const targetDir = join(SKILLS_ROOT, roleId, skillId);
-    if (existsSync(targetDir)) {
-      const { rmSync } = require("fs");
-      rmSync(targetDir, { recursive: true, force: true });
+    // 2. 删除 Blob 内容（blobPath 为前缀，列出其下所有文件后批量删除）
+    if (doc.blobPath) {
+      try {
+        const pathnames = await blobListPathnames(doc.blobPath);
+        if (pathnames.length > 0) await blobDel(pathnames);
+      } catch {
+        // Blob 已不存在则忽略
+      }
     }
 
     return NextResponse.json({ deleted: true, skillId, roleId });

@@ -1,13 +1,13 @@
 /**
  * DELETE /api/settings/roles/[roleId]/resources/[resourceId]
+ *
+ * 1. 从 MongoDB 删除元数据
+ * 2. 删除 Vercel Blob 中该资源的所有文件（按 blobPrefix 前缀）
  */
 import { NextResponse } from "next/server";
-import { existsSync } from "fs";
-import { join, resolve } from "path";
 import { connectToMongo } from "@/lib/mongodb";
 import { RoleResourceModel } from "@/lib/models/role-resource";
-
-const RESOURCES_ROOT = resolve(process.cwd(), "resources");
+import { blobListPathnames, blobDel } from "@/lib/blob";
 
 export async function DELETE(
   _req: Request,
@@ -17,15 +17,21 @@ export async function DELETE(
     const { roleId, resourceId } = await params;
 
     await connectToMongo();
-    const result = await RoleResourceModel.deleteOne({ roleId, resourceId });
-    if (result.deletedCount === 0) {
+    const doc = await RoleResourceModel.findOneAndDelete({
+      roleId,
+      resourceId,
+    }).lean();
+    if (!doc) {
       return NextResponse.json({ error: "Resource not found." }, { status: 404 });
     }
 
-    const targetDir = join(RESOURCES_ROOT, roleId, resourceId);
-    if (existsSync(targetDir)) {
-      const { rmSync } = require("fs");
-      rmSync(targetDir, { recursive: true, force: true });
+    // 删除该资源下的所有 blob 文件
+    const prefix = doc.blobPrefix ?? `resources/${roleId}/${resourceId}/`;
+    try {
+      const pathnames = await blobListPathnames(prefix);
+      if (pathnames.length > 0) await blobDel(pathnames);
+    } catch {
+      // Blob 已不存在则忽略
     }
 
     return NextResponse.json({ deleted: true, roleId, resourceId });

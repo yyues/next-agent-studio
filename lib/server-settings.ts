@@ -296,7 +296,7 @@ export async function getRoleSettings(userId: string) {
     return {
       currentRoleId,
       roles,
-      availableSkillIds: getAvailableSkillIds(currentRoleId),
+      availableSkillIds: await getAvailableSkillIds(currentRoleId),
     };
   } catch (error) {
     console.warn(
@@ -306,7 +306,7 @@ export async function getRoleSettings(userId: string) {
     return {
       currentRoleId: "general",
       roles: defaultRoleProfiles,
-      availableSkillIds: getAvailableSkillIds("general"),
+      availableSkillIds: await getAvailableSkillIds("general"),
     };
   }
 }
@@ -501,8 +501,8 @@ export async function deleteRole(userId: string, roleId: string) {
   }
 
   // 清理角色对应的 skill 目录
-  removeRoleSkillDir(roleId);
-  removeRoleResourceDir(roleId);
+  await removeRoleSkillDir(roleId);
+  await removeRoleResourceDir(roleId);
 
   return { deleted: true };
 }
@@ -527,7 +527,7 @@ export async function getRoleById(userId: string, roleId: string) {
     skills: loadedSkills.map((s) => ({
       skillId: s.id,
       title: s.title,
-      description: s.instructions?.slice(0, 120) ?? "",
+      description: s.description ?? s.instructions?.slice(0, 120) ?? "",
       version: s.version,
     })),
     resources: resources.map((r) => ({

@@ -1,51 +1,67 @@
 /**
  * Skills 加载器
  *
- * 核心职责：从 skills/{roleId}/ 目录扫描 skill 包，
- * 读取 SKILL.md（含 YAML frontmatter 元数据），
- * 返回 SkillModule[] 供 systemPrompt 拼装使用。
+ * 数据来源（合并，DB 上传项覆盖同 id 的内置项）：
+ * 1. 文件系统内置 skill —— 仓库提交的 skills/{roleId}/{skillId}/SKILL.md
+ *    （在 Vercel 上提交文件可读，无需写入）
+ * 2. 用户上传 skill —— 元数据存 MongoDB（SkillDoc），内容按 zip 原结构逐文件
+ *    解压到 Vercel Blob 的 skills/{roleId}/{skillId}/ 前缀下
+ *    （blobPath 存该前缀；加载时按前缀列出文件，读 SKILL.md/prompts/knowledge）
  *
- * 目录结构约定：
- *   skills/
- *     {roleId}/
- *       {skillId}/
- *         SKILL.md         ← 必须，含 frontmatter 元数据 + 指令正文
- *         prompts/         ← 可选，prompt 模板
- *         knowledge/       ← 可选，知识库文档
+ * 目录结构约定（内置与上传统一）：
+ *   skills/{roleId}/{skillId}/
+ *     SKILL.md         ← 必须，含 frontmatter 元数据 + 指令正文
+ *     prompts/         ← 可选，prompt 模板
+ *     knowledge/       ← 可选，知识库文档
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import { join, resolve } from "path";
 import type { SkillModule } from "./types";
+import { connectToMongo } from "@/lib/mongodb";
+import { SkillDocModel } from "@/lib/models/skill-doc";
+import { blobGetText, blobListPathnames, blobDel } from "@/lib/blob";
 
 // 项目根目录下的 skills 文件夹
 const SKILLS_ROOT = resolve(process.cwd(), "skills");
 
 /**
- * 确保角色的 skill 目录存在，不存在则创建
+ * 确保角色的 skill 目录存在（文件系统内置 skill 用）。
+ * 在只读文件系统（Vercel 生产）上静默跳过：上传 skill 走 Blob，无需本地目录。
  */
 export function ensureRoleSkillDir(roleId: string): string {
   const dir = join(SKILLS_ROOT, roleId);
   if (!existsSync(dir)) {
-    const { mkdirSync } = require("fs");
-    mkdirSync(dir, { recursive: true });
+    try {
+      const { mkdirSync } = require("fs");
+      mkdirSync(dir, { recursive: true });
+    } catch {
+      // 只读文件系统上无法创建目录，静默跳过
+    }
   }
   return dir;
 }
 
 /**
- * 删除角色的整个 skill 目录
+ * 删除角色的所有上传 skill：清理 Vercel Blob + MongoDB 记录。
+ * 内置 skill（仓库提交）不在 Blob/DB 中，不受影响。
  */
-export function removeRoleSkillDir(roleId: string): void {
-  const dir = join(SKILLS_ROOT, roleId);
-  if (existsSync(dir)) {
-    const { rmSync } = require("fs");
-    rmSync(dir, { recursive: true, force: true });
+export async function removeRoleSkillDir(roleId: string): Promise<void> {
+  try {
+    await connectToMongo();
+    await SkillDocModel.deleteMany({ roleId });
+  } catch {
+    // 数据库清理失败不阻断
+  }
+  try {
+    const pathnames = await blobListPathnames(`skills/${roleId}/`);
+    if (pathnames.length > 0) await blobDel(pathnames);
+  } catch {
+    // Blob 清理失败不阻断
   }
 }
 
 /**
  * 读取目录下所有子文件的内容，返回 string[]
- * 用于读取 prompts/ 和 knowledge/ 目录
  */
 function readDirFiles(dirPath: string): string[] {
   if (!existsSync(dirPath)) return [];
@@ -58,9 +74,8 @@ function readDirFiles(dirPath: string): string[] {
 
 /**
  * 解析 SKILL.md 的 YAML frontmatter
- * 支持 name、title、description、version 等字段
  */
-function parseFrontmatter(
+export function parseFrontmatter(
   raw: string,
 ): { meta: Record<string, string>; body: string } {
   const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
@@ -78,14 +93,9 @@ function parseFrontmatter(
 }
 
 /**
- * 加载指定角色的所有 skills
- *
- * 扫描 skills/{roleId}/ 下的每个子目录，
- * 读取 SKILL.md 获取 frontmatter 元数据和指令内容。
+ * 从文件系统加载内置 skill（按 SKILL.md 扫描）
  */
-export async function loadSkillsByRoleId(
-  roleId: string,
-): Promise<SkillModule[]> {
+async function loadBuiltinSkills(roleId: string): Promise<SkillModule[]> {
   const roleDir = join(SKILLS_ROOT, roleId);
   if (!existsSync(roleDir)) return [];
 
@@ -99,30 +109,24 @@ export async function loadSkillsByRoleId(
   for (const skillId of entries) {
     const skillDir = join(roleDir, skillId);
     const skillMdPath = join(skillDir, "SKILL.md");
-
-    // 跳过没有 SKILL.md 的目录
     if (!existsSync(skillMdPath)) continue;
 
     try {
       const raw = readFileSync(skillMdPath, "utf-8");
       const { meta, body } = parseFrontmatter(raw);
-
-      // 可选：读取 prompts/ 目录下的模板文件
       const prompts = readDirFiles(join(skillDir, "prompts"));
-
-      // 可选：读取 knowledge/ 目录下的知识库文档
       const knowledge = readDirFiles(join(skillDir, "knowledge"));
 
       skills.push({
         id: meta.name || meta.id || skillId,
         title: meta.title || meta.name || skillId,
+        description: meta.description,
         instructions: body,
         prompts: prompts.length > 0 ? prompts : undefined,
         knowledge: knowledge.length > 0 ? knowledge : undefined,
         version: meta.version,
       });
     } catch {
-      // 跳过解析失败的 skill，不影响其他 skill 加载
       continue;
     }
   }
@@ -131,17 +135,81 @@ export async function loadSkillsByRoleId(
 }
 
 /**
- * 获取指定角色下所有可用的 skill ID 列表
+ * 从 MongoDB + Vercel Blob 加载用户上传的 skill
+ * （按 blobPath 前缀列出 zip 解压后的原始文件，读 SKILL.md + prompts/ + knowledge/）
  */
-export function getAvailableSkillIds(roleId: string): string[] {
-  const roleDir = join(SKILLS_ROOT, roleId);
-  if (!existsSync(roleDir)) return [];
+async function loadUploadedSkills(roleId: string): Promise<SkillModule[]> {
+  try {
+    await connectToMongo();
+    const docs = await SkillDocModel.find({ roleId, enabled: true }).lean();
+    const skills: SkillModule[] = [];
+    for (const doc of docs) {
+      const prefix = doc.blobPath || `skills/${roleId}/${doc.skillId}/`;
+      const pathnames = await blobListPathnames(prefix);
+      if (pathnames.length === 0) continue;
 
-  return readdirSync(roleDir).filter((name) => {
-    const fullPath = join(roleDir, name);
-    return (
-      statSync(fullPath).isDirectory() &&
-      existsSync(join(fullPath, "SKILL.md"))
-    );
-  });
+      // 找到 SKILL.md（前缀下任一层级，通常直接位于前缀下）
+      const skillMdPath = pathnames.find((p) => p === `${prefix}SKILL.md`);
+      if (!skillMdPath) continue;
+
+      const raw = await blobGetText(skillMdPath);
+      if (!raw) continue;
+      const { body } = parseFrontmatter(raw);
+
+      // 收集 prompts/ 与 knowledge/ 下的文件内容
+      const promptsPrefix = `${prefix}prompts/`;
+      const knowledgePrefix = `${prefix}knowledge/`;
+      const prompts: string[] = [];
+      const knowledge: string[] = [];
+      for (const p of pathnames) {
+        if (p.startsWith(promptsPrefix)) {
+          const t = await blobGetText(p);
+          if (t) prompts.push(t);
+        } else if (p.startsWith(knowledgePrefix)) {
+          const t = await blobGetText(p);
+          if (t) knowledge.push(t);
+        }
+      }
+
+      skills.push({
+        id: doc.skillId,
+        title: doc.title,
+        description: doc.description,
+        instructions: body,
+        prompts: prompts.length > 0 ? prompts : undefined,
+        knowledge: knowledge.length > 0 ? knowledge : undefined,
+        version: doc.version,
+      });
+    }
+    return skills;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 加载指定角色的所有 skills：合并内置（文件系统）+ 上传（Blob/DB）。
+ * 同 id 时上传项覆盖内置项。
+ */
+export async function loadSkillsByRoleId(
+  roleId: string,
+): Promise<SkillModule[]> {
+  const [builtin, uploaded] = await Promise.all([
+    loadBuiltinSkills(roleId),
+    loadUploadedSkills(roleId),
+  ]);
+
+  const merged = new Map<string, SkillModule>();
+  for (const s of builtin) merged.set(s.id, s);
+  for (const s of uploaded) merged.set(s.id, s); // 上传项覆盖
+
+  return Array.from(merged.values());
+}
+
+/**
+ * 获取指定角色下所有可用的 skill ID 列表：合并内置 + 上传
+ */
+export async function getAvailableSkillIds(roleId: string): Promise<string[]> {
+  const skills = await loadSkillsByRoleId(roleId);
+  return skills.map((s) => s.id);
 }

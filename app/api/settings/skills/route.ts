@@ -9,6 +9,7 @@ import { readdirSync, existsSync, readFileSync, statSync } from "fs";
 import { join, resolve } from "path";
 import { connectToMongo } from "@/lib/mongodb";
 import { SkillDocModel } from "@/lib/models/skill-doc";
+import { parseFrontmatter } from "@/lib/skills";
 
 const SKILLS_ROOT = resolve(process.cwd(), "skills");
 
@@ -23,7 +24,7 @@ export async function GET(req: Request) {
     if (roleIdFilter) query.roleId = roleIdFilter;
     const docs = await SkillDocModel.find(query).lean();
 
-    // 如果数据库为空，回退到文件系统扫描
+    // 如果数据库为空，回退到文件系统扫描（按 SKILL.md frontmatter）
     if (docs.length === 0 && existsSync(SKILLS_ROOT)) {
       const roles = roleIdFilter
         ? [roleIdFilter]
@@ -39,16 +40,18 @@ export async function GET(req: Request) {
           statSync(join(roleDir, name)).isDirectory(),
         );
         for (const skillId of skillDirs) {
-          const manifestPath = join(roleDir, skillId, "manifest.json");
-          if (!existsSync(manifestPath)) continue;
+          const skillMdPath = join(roleDir, skillId, "SKILL.md");
+          if (!existsSync(skillMdPath)) continue;
           try {
-            const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+            const { meta } = parseFrontmatter(
+              readFileSync(skillMdPath, "utf-8"),
+            );
             skills.push({
-              skillId: manifest.id || skillId,
+              skillId: meta.name || meta.id || skillId,
               roleId,
-              title: manifest.title || skillId,
-              description: manifest.description || "",
-              version: manifest.version || "1.0.0",
+              title: meta.title || meta.name || skillId,
+              description: meta.description || "",
+              version: meta.version || "1.0.0",
               filePath: `skills/${roleId}/${skillId}`,
               enabled: true,
               source: "file",

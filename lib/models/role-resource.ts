@@ -6,7 +6,10 @@ const roleResourceSchema = new Schema(
     roleId: { type: String, required: true, index: true },
     fileName: { type: String, required: true },
     md5: { type: String, required: true },
-    filePath: { type: String, required: true },
+    // 逻辑展示路径
+    filePath: { type: String, default: "" },
+    // Vercel Blob 目录前缀，如 "resources/{roleId}/{resourceId}/"
+    blobPrefix: { type: String, default: "" },
   },
   {
     timestamps: true,

@@ -17,6 +17,7 @@
     "@assistant-ui/react": "latest",
     "@assistant-ui/react-markdown": "latest",
     "@base-ui/react": "^1.7.0",
+    "@vercel/blob": "^2.8.0",
     "adm-zip": "^0.6.0",
     "ai": "^7.0.77",
     "class-variance-authority": "^0.7.1",
