@@ -91,3 +91,12 @@ npx assistant-ui add
 - `components/assistant-ui/provider-settings.tsx` - Provider and role settings dialog
 - `lib/server-settings.ts` - Provider/role persistence and runtime resolution
 - `lib/mongodb.ts` - MongoDB connection helper
+
+### Runtime Data Directories
+
+The following directories are created at runtime (via uploads) and are **not** part of the build bundle:
+
+- `skills/` — Skill packages per role, organized as `skills/{roleId}/{skillId}/`. Accessed server-side via Node.js `fs` module. Not served as static assets.
+- `resources/` — RAG reference materials per role, organized as `resources/{roleId}/{resourceId}/`. Same access pattern as `skills/`.
+
+Both directories are listed in `.gitignore` and should not be committed. In production, ensure persistent storage (Docker volume, NFS, etc.) is mounted at the project root so uploads survive restarts.

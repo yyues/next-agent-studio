@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState, type FC } from "react";
 import { useTranslations } from "next-intl";
-import { Link } from "@/i18n/navigation";
+import { Link, useRouter } from "@/i18n/navigation";
 import { getClientRuntimeContext } from "@/lib/client-runtime-context";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,18 +13,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  ArrowLeftIcon,
-  PencilIcon,
-  PlusIcon,
-  Trash2Icon,
-  ShieldCheckIcon,
-  UserIcon,
-} from "lucide-react";
+import { ArrowLeftIcon, PlusIcon, ShieldCheckIcon, UserIcon } from "lucide-react";
 
 type RoleItem = {
   roleId: string;
   displayName: string;
+  description?: string;
   enabled: boolean;
   systemPrompt: string;
   skillIds: string[];
@@ -52,15 +46,14 @@ const builtinRoleIds = new Set(["general", "developer", "analyst"]);
 export default function RolesPage() {
   const t = useTranslations("roles");
   const tc = useTranslations("common");
+  const router = useRouter();
   const [roles, setRoles] = useState<RoleItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingRole, setEditingRole] = useState<RoleItem | null>(null);
   const [form, setForm] = useState<RoleForm>(emptyForm);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState<"success" | "error" | "">("");
-  const [deleteConfirm, setDeleteConfirm] = useState<RoleItem | null>(null);
 
   const loadRoles = useCallback(async () => {
     setLoading(true);
@@ -85,100 +78,41 @@ export default function RolesPage() {
   }, [loadRoles]);
 
   const openCreate = () => {
-    setEditingRole(null);
     setForm(emptyForm);
     setMessage("");
     setDialogOpen(true);
   };
 
-  const openEdit = (role: RoleItem) => {
-    if (builtinRoleIds.has(role.roleId)) return;
-    setEditingRole(role);
-    setForm({
-      roleId: role.roleId,
-      displayName: role.displayName,
-      systemPrompt: role.systemPrompt,
-      enabled: role.enabled,
-      priority: role.priority,
-    });
-    setMessage("");
-    setDialogOpen(true);
-  };
-
-  const handleSave = async () => {
+  const handleCreate = async () => {
     setSaving(true);
     setMessage("");
     setMessageType("");
     try {
       const userId = getClientRuntimeContext().userId;
-      if (editingRole) {
-        const res = await fetch(
-          `/api/settings/roles/${encodeURIComponent(editingRole.roleId)}`,
-          {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              userId,
-              displayName: form.displayName,
-              systemPrompt: form.systemPrompt,
-              enabled: form.enabled,
-              priority: form.priority,
-            }),
-          },
-        );
-        if (!res.ok) {
-          const err = (await res.json()) as { error?: string };
-          throw new Error(err.error || t("saveFailed"));
-        }
-        setMessage(t("updateSuccess"));
-      } else {
-        const res = await fetch("/api/settings/roles", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            userId,
-            roleId: form.roleId,
-            displayName: form.displayName,
-            systemPrompt: form.systemPrompt,
-            enabled: form.enabled,
-            priority: form.priority,
-          }),
-        });
-        if (!res.ok) {
-          const err = (await res.json()) as { error?: string };
-          throw new Error(err.error || t("saveFailed"));
-        }
-        setMessage(t("createSuccess"));
+      const res = await fetch("/api/settings/roles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId,
+          roleId: form.roleId,
+          displayName: form.displayName,
+          systemPrompt: form.systemPrompt,
+          enabled: form.enabled,
+          priority: form.priority,
+        }),
+      });
+      if (!res.ok) {
+        const err = (await res.json()) as { error?: string };
+        throw new Error(err.error || t("saveFailed"));
       }
       setMessageType("success");
       setDialogOpen(false);
-      await loadRoles();
+      router.push(`/admin/roles/${encodeURIComponent(form.roleId.trim())}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : t("saveFailed"));
       setMessageType("error");
     } finally {
       setSaving(false);
-    }
-  };
-
-  const handleDelete = async (role: RoleItem) => {
-    try {
-      const userId = getClientRuntimeContext().userId;
-      const res = await fetch(
-        `/api/settings/roles/${encodeURIComponent(role.roleId)}?userId=${encodeURIComponent(userId)}`,
-        { method: "DELETE" },
-      );
-      if (!res.ok) {
-        const err = (await res.json()) as { error?: string };
-        throw new Error(err.error || t("deleteFailed"));
-      }
-      setMessage(t("deleteSuccess"));
-      setMessageType("success");
-      setDeleteConfirm(null);
-      await loadRoles();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : t("deleteFailed"));
-      setMessageType("error");
     }
   };
 
@@ -231,14 +165,7 @@ export default function RolesPage() {
               </h2>
               <div className="grid gap-3">
                 {builtinRoles.map((role) => (
-                  <RoleCard
-                    key={role.roleId}
-                    role={role}
-                    builtin
-                    t={t}
-                    onEdit={() => openEdit(role)}
-                    onDelete={() => setDeleteConfirm(role)}
-                  />
+                  <RoleCard key={role.roleId} role={role} builtin t={t} />
                 ))}
               </div>
             </section>
@@ -254,14 +181,7 @@ export default function RolesPage() {
               ) : (
                 <div className="grid gap-3">
                   {customRoles.map((role) => (
-                    <RoleCard
-                      key={role.roleId}
-                      role={role}
-                      builtin={false}
-                      t={t}
-                      onEdit={() => openEdit(role)}
-                      onDelete={() => setDeleteConfirm(role)}
-                    />
+                    <RoleCard key={role.roleId} role={role} builtin={false} t={t} />
                   ))}
                 </div>
               )}
@@ -273,30 +193,24 @@ export default function RolesPage() {
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>
-              {editingRole ? t("edit") : t("create")}
-            </DialogTitle>
-            <DialogDescription>
-              {editingRole ? t("builtinReadonly") : ""}
-            </DialogDescription>
+            <DialogTitle>{t("create")}</DialogTitle>
+            <DialogDescription />
           </DialogHeader>
           <div className="grid gap-3">
-            {!editingRole && (
-              <label className="grid gap-1.5">
-                <span className="text-xs text-muted-foreground">
-                  {t("roleId")}
-                </span>
-                <input
-                  value={form.roleId}
-                  onChange={(e) =>
-                    setForm((p) => ({ ...p, roleId: e.target.value }))
-                  }
-                  className="bg-background border-input h-9 rounded-md border px-2.5 text-sm outline-none"
-                  placeholder={t("roleIdPlaceholder")}
-                  disabled={saving}
-                />
-              </label>
-            )}
+            <label className="grid gap-1.5">
+              <span className="text-xs text-muted-foreground">
+                {t("roleId")}
+              </span>
+              <input
+                value={form.roleId}
+                onChange={(e) =>
+                  setForm((p) => ({ ...p, roleId: e.target.value }))
+                }
+                className="bg-background border-input h-9 rounded-md border px-2.5 text-sm outline-none"
+                placeholder={t("roleIdPlaceholder")}
+                disabled={saving}
+              />
+            </label>
             <label className="grid gap-1.5">
               <span className="text-xs text-muted-foreground">
                 {t("displayName")}
@@ -366,38 +280,8 @@ export default function RolesPage() {
             >
               {tc("cancel")}
             </Button>
-            <Button onClick={handleSave} disabled={saving}>
+            <Button onClick={handleCreate} disabled={saving}>
               {saving ? tc("loading") : tc("save")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog
-        open={!!deleteConfirm}
-        onOpenChange={() => setDeleteConfirm(null)}
-      >
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>{t("delete")}</DialogTitle>
-            <DialogDescription>
-              {deleteConfirm
-                ? t("deleteConfirm", { name: deleteConfirm.displayName })
-                : ""}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setDeleteConfirm(null)}
-            >
-              {tc("cancel")}
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => deleteConfirm && handleDelete(deleteConfirm)}
-            >
-              {tc("delete")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -410,11 +294,15 @@ const RoleCard: FC<{
   role: RoleItem;
   builtin: boolean;
   t: (key: string) => string;
-  onEdit: () => void;
-  onDelete: () => void;
-}> = ({ role, builtin, t, onEdit, onDelete }) => {
+}> = ({ role, builtin, t }) => {
+  const router = useRouter();
+
   return (
-    <div className="border-border/60 bg-card flex items-start justify-between gap-4 rounded-lg border p-4">
+    <button
+      type="button"
+      onClick={() => router.push(`/admin/roles/${encodeURIComponent(role.roleId)}`)}
+      className="border-border/60 bg-card hover:bg-accent/50 flex w-full items-start justify-between gap-4 rounded-lg border p-4 text-left transition-colors cursor-pointer"
+    >
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           {builtin ? (
@@ -446,31 +334,9 @@ const RoleCard: FC<{
           </span>
         </div>
         <p className="text-muted-foreground mt-1 line-clamp-2 text-sm">
-          {role.systemPrompt}
+          {role.description || role.systemPrompt}
         </p>
       </div>
-      <div className="flex shrink-0 items-center gap-1">
-        {!builtin && (
-          <>
-            <button
-              onClick={onEdit}
-              className="text-muted-foreground hover:text-foreground hover:bg-muted inline-flex size-7 items-center justify-center rounded transition-colors"
-              aria-label="Edit"
-              type="button"
-            >
-              <PencilIcon className="size-3.5" />
-            </button>
-            <button
-              onClick={onDelete}
-              className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 inline-flex size-7 items-center justify-center rounded transition-colors"
-              aria-label="Delete"
-              type="button"
-            >
-              <Trash2Icon className="size-3.5" />
-            </button>
-          </>
-        )}
-      </div>
-    </div>
+    </button>
   );
 };

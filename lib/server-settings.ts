@@ -4,12 +4,14 @@ import { connectToMongo } from "@/lib/mongodb";
 import { ProviderConfigModel } from "@/lib/models/provider-config";
 import { RoleProfileModel } from "@/lib/models/role-profile";
 import { UserSettingModel } from "@/lib/models/user-setting";
+import { RoleResourceModel } from "@/lib/models/role-resource";
 import {
   loadSkillsByRoleId,
   ensureRoleSkillDir,
   removeRoleSkillDir,
   getAvailableSkillIds,
 } from "@/lib/skills";
+import { removeRoleResourceDir } from "@/lib/resources";
 
 export type ProviderSettings = {
   providerName: string;
@@ -21,6 +23,7 @@ export type ProviderSettings = {
 export type RoleProfile = {
   roleId: string;
   displayName: string;
+  description: string;
   enabled: boolean;
   systemPrompt: string;
   skillIds: string[];
@@ -40,6 +43,7 @@ const defaultRoleProfiles: RoleProfile[] = [
   {
     roleId: "general",
     displayName: "General Assistant",
+    description: "",
     enabled: true,
     systemPrompt:
       "You are a practical assistant. Keep answers direct and useful.",
@@ -50,6 +54,7 @@ const defaultRoleProfiles: RoleProfile[] = [
   {
     roleId: "developer",
     displayName: "Developer",
+    description: "",
     enabled: true,
     systemPrompt:
       "You are a senior software engineer. Explain trade-offs and favor safe, maintainable implementations.",
@@ -96,6 +101,7 @@ function toRoleProfile(doc: Record<string, unknown>): RoleProfile {
   return {
     roleId: String(doc.roleId),
     displayName: String(doc.displayName),
+    description: String(doc.description ?? ""),
     enabled: Boolean(doc.enabled),
     systemPrompt: String(doc.systemPrompt),
     skillIds: Array.isArray(doc.skillIds)
@@ -245,10 +251,11 @@ async function seedDefaultRoles(userId: string) {
     await RoleProfileModel.findOneAndUpdate(
       { userId, roleId: role.roleId },
       {
-        $setOnInsert: {
+    $setOnInsert: {
           userId,
           roleId: role.roleId,
           displayName: role.displayName,
+          description: role.description,
           enabled: role.enabled,
           systemPrompt: role.systemPrompt,
           skillIds: role.skillIds,
@@ -404,6 +411,7 @@ export async function createRole(
     roleId: string;
     displayName: string;
     systemPrompt: string;
+    description?: string;
     enabled?: boolean;
     priority?: number;
   },
@@ -427,6 +435,7 @@ export async function createRole(
     roleId: payload.roleId,
     displayName: payload.displayName,
     systemPrompt: payload.systemPrompt,
+    description: payload.description ?? "",
     enabled: payload.enabled ?? true,
     skillIds: ["base"],
     toolToggles: {},
@@ -444,6 +453,7 @@ export async function updateRole(
   roleId: string,
   payload: Partial<{
     displayName: string;
+    description: string;
     systemPrompt: string;
     enabled: boolean;
     priority: number;
@@ -458,6 +468,8 @@ export async function updateRole(
   const update: Record<string, unknown> = {};
   if (payload.displayName !== undefined)
     update.displayName = payload.displayName;
+  if (payload.description !== undefined)
+    update.description = payload.description;
   if (payload.systemPrompt !== undefined)
     update.systemPrompt = payload.systemPrompt;
   if (payload.enabled !== undefined) update.enabled = payload.enabled;
@@ -490,6 +502,39 @@ export async function deleteRole(userId: string, roleId: string) {
 
   // 清理角色对应的 skill 目录
   removeRoleSkillDir(roleId);
+  removeRoleResourceDir(roleId);
 
   return { deleted: true };
+}
+
+export async function getRoleById(userId: string, roleId: string) {
+  await connectToMongo();
+  await seedDefaultRoles(userId);
+
+  const defaultRole = defaultRoleProfiles.find((r) => r.roleId === roleId);
+  const doc = await RoleProfileModel.findOne({ userId, roleId }).lean();
+  const role = doc
+    ? toRoleProfile(doc as Record<string, unknown>)
+    : defaultRole;
+
+  if (!role) throw new Error("Role not found.");
+
+  const loadedSkills = await loadSkillsByRoleId(roleId);
+  const resources = await RoleResourceModel.find({ roleId }).lean();
+
+  return {
+    role,
+    skills: loadedSkills.map((s) => ({
+      skillId: s.id,
+      title: s.title,
+      description: s.instructions?.slice(0, 120) ?? "",
+      version: s.version,
+    })),
+    resources: resources.map((r) => ({
+      resourceId: r.resourceId,
+      fileName: r.fileName,
+      filePath: r.filePath,
+      createdAt: r.createdAt,
+    })),
+  };
 }

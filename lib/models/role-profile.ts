@@ -5,6 +5,7 @@ const roleProfileSchema = new Schema(
     userId: { type: String, required: true, index: true },
     roleId: { type: String, required: true },
     displayName: { type: String, required: true },
+    description: { type: String, default: "" },
     enabled: { type: Boolean, required: true, default: true },
     systemPrompt: { type: String, required: true },
     skillIds: { type: [String], required: true, default: [] },
