@@ -1,12 +1,12 @@
 import { redirect } from "next/navigation";
 
 /**
- * /{locale} → /{locale}/chat/<chatId>
+ * /{locale}/chat → /{locale}/chat/<chatId>
  *
- * 根路径直接生成会话 id 并进入动态路由 /chat/<chatId>，保留 query（如 ?roleId=pm）。
- * 单次 redirect，避免多跳。
+ * 直接访问 /chat（无 chatId）时生成会话 id 并 redirect 到动态路由，
+ * 保证 URL 始终为 /chat/<chatId> 形态。保留 query（如 ?roleId=pm）。
  */
-export default async function Home({
+export default async function ChatIndexPage({
   params,
   searchParams,
 }: {

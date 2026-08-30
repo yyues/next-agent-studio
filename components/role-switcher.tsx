@@ -15,7 +15,12 @@ type RoleItem = {
 
 const builtinRoleIds = new Set(["general", "developer", "analyst"]);
 
-export const RoleSwitcher: FC = () => {
+type RoleSwitcherProps = {
+  /** 切换角色后的回调（由对话页触发新建会话） */
+  onRoleSwitch?: (roleId: string) => void;
+};
+
+export const RoleSwitcher: FC<RoleSwitcherProps> = ({ onRoleSwitch }) => {
   const t = useTranslations("roles");
   const pathname = usePathname();
   const [roles, setRoles] = useState<RoleItem[]>([]);
@@ -60,6 +65,8 @@ export const RoleSwitcher: FC = () => {
     } catch {
       // silently ignore
     }
+    // 通知对话页新建会话（切换角色不复用旧会话）
+    onRoleSwitch?.(roleId);
   };
 
   if (loading || roles.length === 0) return null;

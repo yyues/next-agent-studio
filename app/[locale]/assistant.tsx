@@ -5,10 +5,20 @@ import { useChatRuntime, AssistantChatTransport } from "@assistant-ui/ai-sdk";
 import { lastAssistantMessageIsCompleteWithToolCalls } from "ai";
 import { Thread } from "@/components/assistant-ui/thread";
 import { getClientRuntimeContext } from "@/lib/client-runtime-context";
-import { ThemeToggle } from "@/components/theme-toggle";
-import { RoleSwitcher } from "@/components/role-switcher";
+import type { FC } from "react";
 
-export const Assistant = () => {
+type AssistantProps = {
+  /** 当前会话唯一 id，透传给 /api/chat 用于服务端会话维度 */
+  conversationId: string;
+  /** 当前角色 id（来自 URL），缺省回退到运行时上下文 */
+  roleId?: string;
+};
+
+/**
+ * 对话运行时。会话由父组件按 conversationId remount（key 变化），
+ * 每次对话拿到全新线程，切换角色/新建对话不会复用上一个会话。
+ */
+export const Assistant: FC<AssistantProps> = ({ conversationId, roleId }) => {
   const runtime = useChatRuntime({
     sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
     transport: new AssistantChatTransport({
@@ -17,7 +27,8 @@ export const Assistant = () => {
         const context = getClientRuntimeContext();
         return {
           userId: context.userId,
-          roleId: context.roleId,
+          roleId: roleId ?? context.roleId,
+          conversationId,
         };
       },
       headers: () => {
@@ -31,17 +42,7 @@ export const Assistant = () => {
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <div className="relative h-dvh">
-        <div className="absolute top-3 right-3 z-10 flex items-center gap-1.5">
-          <ThemeToggle />
-        </div>
-        <div className="h-dvh flex flex-col">
-          <RoleSwitcher />
-          <div className="flex-1 min-h-0">
-            <Thread />
-          </div>
-        </div>
-      </div>
+      <Thread />
     </AssistantRuntimeProvider>
   );
 };

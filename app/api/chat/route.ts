@@ -24,6 +24,8 @@ export async function POST(req: Request) {
     tools?: Record<string, { description?: string; parameters: JSONSchema7 }>;
     userId?: string;
     roleId?: string;
+    // conversationId 由客户端携带（见 assistant.tsx），服务端预留用于会话维度
+    conversationId?: string;
   } = await req.json();
 
   const normalizedUserId = normalizeUserId(
