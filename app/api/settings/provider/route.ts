@@ -20,6 +20,7 @@ export async function GET(req: Request) {
       providerName: result.config.providerName,
       baseUrl: result.config.baseUrl,
       model: result.config.model,
+      temperature: result.config.temperature,
       maskedApiKey: result.maskedApiKey,
     });
   } catch (error) {
@@ -36,6 +37,7 @@ export async function PUT(req: Request) {
       baseUrl?: string;
       apiKey?: string;
       model?: string;
+      temperature?: number;
     };
 
     const userId = normalizeUserId(payload.userId ?? req.headers.get("x-user-id"));
@@ -45,6 +47,7 @@ export async function PUT(req: Request) {
       baseUrl: payload.baseUrl,
       apiKey: payload.apiKey,
       model: payload.model,
+      temperature: payload.temperature,
     });
 
     return NextResponse.json({
@@ -53,6 +56,7 @@ export async function PUT(req: Request) {
       providerName: result.config.providerName,
       baseUrl: result.config.baseUrl,
       model: result.config.model,
+      temperature: result.config.temperature,
       maskedApiKey: result.maskedApiKey,
     });
   } catch (error) {

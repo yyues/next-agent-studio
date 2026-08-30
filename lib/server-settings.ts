@@ -18,6 +18,7 @@ export type ProviderSettings = {
   baseUrl: string;
   apiKey: string;
   model: string;
+  temperature: number;
 };
 
 export type RoleProfile = {
@@ -37,6 +38,7 @@ const defaultProviderSettings: ProviderSettings = {
   apiKey:
     process.env.DEFAULT_PROVIDER_API_KEY ?? process.env.OPENAI_API_KEY ?? "",
   model: process.env.DEFAULT_PROVIDER_MODEL ?? "gpt-5.6-luna",
+  temperature: Number(process.env.DEFAULT_PROVIDER_TEMPERATURE ?? 0.7),
 };
 
 const defaultRoleProfiles: RoleProfile[] = [
@@ -128,12 +130,18 @@ function normalizeProviderInput(
   payload: Partial<ProviderSettings>,
 ): ProviderSettings {
   validateProviderInput(payload);
+  const rawTemp = Number(payload.temperature);
+  const temperature =
+    Number.isFinite(rawTemp) && rawTemp >= 0 && rawTemp <= 2
+      ? rawTemp
+      : defaultProviderSettings.temperature;
   return {
     providerName:
       payload.providerName?.trim() || defaultProviderSettings.providerName,
     baseUrl: payload.baseUrl!.trim(),
     apiKey: payload.apiKey!.trim(),
     model: payload.model!.trim(),
+    temperature,
   };
 }
 
@@ -171,6 +179,10 @@ export async function getProviderSettings(userId: string) {
       baseUrl: doc.baseUrl,
       apiKey: doc.apiKey,
       model: doc.model,
+      temperature:
+        typeof doc.temperature === "number"
+          ? doc.temperature
+          : defaultProviderSettings.temperature,
     } satisfies ProviderSettings;
 
     return {
@@ -203,6 +215,10 @@ export async function upsertProviderSettings(
     baseUrl: payload.baseUrl ?? existing.config.baseUrl,
     apiKey: payload.apiKey?.trim() ? payload.apiKey : existing.config.apiKey,
     model: payload.model ?? existing.config.model,
+    temperature:
+      typeof payload.temperature === "number"
+        ? payload.temperature
+        : existing.config.temperature,
   });
 
   const doc = await ProviderConfigModel.findOneAndUpdate(
@@ -220,6 +236,10 @@ export async function upsertProviderSettings(
     baseUrl: doc.baseUrl,
     apiKey: doc.apiKey,
     model: doc.model,
+    temperature:
+      typeof doc.temperature === "number"
+        ? doc.temperature
+        : defaultProviderSettings.temperature,
   };
 
   return {
@@ -346,6 +366,10 @@ export async function resolveRuntimeConfig(input: {
           input.overrideProvider.baseUrl ?? providerFromDb.config.baseUrl,
         apiKey: input.overrideProvider.apiKey ?? providerFromDb.config.apiKey,
         model: input.overrideProvider.model ?? providerFromDb.config.model,
+        temperature:
+          typeof input.overrideProvider.temperature === "number"
+            ? input.overrideProvider.temperature
+            : providerFromDb.config.temperature,
       })
     : providerFromDb.config;
 
@@ -387,6 +411,7 @@ export async function resolveRuntimeConfig(input: {
     provider,
     role,
     systemPrompt,
+    temperature: provider.temperature,
   };
 }
 

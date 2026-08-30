@@ -7,6 +7,7 @@ const providerConfigSchema = new Schema(
     baseUrl: { type: String, required: true },
     apiKey: { type: String, required: true },
     model: { type: String, required: true },
+    temperature: { type: Number, default: 0.7, min: 0, max: 2 },
   },
   {
     timestamps: true,

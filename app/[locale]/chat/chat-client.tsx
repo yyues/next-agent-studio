@@ -3,7 +3,7 @@
 import { useEffect, type FC } from "react";
 import { useRouter } from "@/i18n/navigation";
 import { Assistant } from "../assistant";
-import { RoleSwitcher } from "@/components/role-switcher";
+import { SettingsMenu } from "@/components/assistant-ui/settings-menu";
 import { ThemeToggle } from "@/components/theme-toggle";
 import {
   getClientRuntimeContext,
@@ -47,11 +47,13 @@ export const ChatClient: FC<ChatClientProps> = ({ chatId, initialRoleId }) => {
 
   return (
     <div className="relative h-dvh">
+      <div className="absolute top-3 left-3 z-10 flex items-center gap-1.5">
+        <SettingsMenu onRoleSwitch={handleRoleSwitch} />
+      </div>
       <div className="absolute top-3 right-3 z-10 flex items-center gap-1.5">
         <ThemeToggle />
       </div>
       <div className="h-dvh flex flex-col">
-        <RoleSwitcher onRoleSwitch={handleRoleSwitch} />
         <div className="flex-1 min-h-0">
           {/* key 随 chatId 变化 → 切换角色/新建对话时 remount runtime，得到全新线程 */}
           <Assistant

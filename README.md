@@ -88,7 +88,7 @@ npx assistant-ui add
 - `app/assistant.tsx` - Sets up the runtime provider
 - `app/api/chat/route.ts` - Chat API endpoint with dynamic provider/role resolution
 - `components/assistant-ui/thread.tsx` - Chat thread component
-- `components/assistant-ui/provider-settings.tsx` - Provider and role settings dialog
+- `app/[locale]/settings/provider/page.tsx` - Provider settings page (base URL, key, model, temperature)
 - `lib/server-settings.ts` - Provider/role persistence and runtime resolution
 - `lib/mongodb.ts` - MongoDB connection helper
 

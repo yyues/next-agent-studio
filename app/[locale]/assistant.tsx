@@ -29,6 +29,7 @@ export const Assistant: FC<AssistantProps> = ({ conversationId, roleId }) => {
           userId: context.userId,
           roleId: roleId ?? context.roleId,
           conversationId,
+          deepThinking: context.deepThinking === true,
         };
       },
       headers: () => {

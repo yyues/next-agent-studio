@@ -44,6 +44,7 @@
     "baseUrl": "Base URL",
     "apiKey": "API Key",
     "model": "Model",
+    "temperature": "Temperature",
     "role": "Role",
     "test": "Test",
     "testing": "Testing...",

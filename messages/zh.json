@@ -44,6 +44,7 @@
     "baseUrl": "Base URL",
     "apiKey": "API Key",
     "model": "模型",
+    "temperature": "温度",
     "role": "角色",
     "test": "测试连接",
     "testing": "测试中...",

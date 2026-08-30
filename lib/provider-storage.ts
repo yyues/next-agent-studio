@@ -13,6 +13,7 @@ export type ProviderConfig = {
   baseUrl: string;
   apiKey: string;
   model: string;
+  temperature?: number;
 };
 
 const STORAGE_KEY = "jx-ai-provider-config";

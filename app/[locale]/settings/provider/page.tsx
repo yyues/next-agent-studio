@@ -2,16 +2,8 @@
 
 import { useEffect, useState, type FC } from "react";
 import { useTranslations } from "next-intl";
-import { Settings2Icon } from "lucide-react";
-import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Link } from "@/i18n/navigation";
+import { ArrowLeftIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   saveProviderLocal,
@@ -20,27 +12,27 @@ import {
 } from "@/lib/provider-storage";
 import { getClientRuntimeContext } from "@/lib/client-runtime-context";
 
-const defaultForm: ProviderConfig = {
+const defaultForm: ProviderConfig & { temperature: number } = {
   providerName: "openai-compatible",
   baseUrl: "https://api.openai.com/v1",
   apiKey: "",
   model: "gpt-5.6-luna",
+  temperature: 0.7,
 };
 
-export const ProviderSettingsButton: FC = () => {
+const ProviderSettingsPage: FC = () => {
   const t = useTranslations("settings");
-  const [open, setOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const tr = useTranslations("roles");
+  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [form, setForm] = useState<ProviderConfig>(defaultForm);
+  const [form, setForm] = useState(defaultForm);
   const [maskedApiKey, setMaskedApiKey] = useState("");
-  const [storedApiKey, setStoredApiKey] = useState("");  // 保留原始 key 用于测试连接
+  const [storedApiKey, setStoredApiKey] = useState(""); // 保留原始 key 用于测试连接
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState<"success" | "error" | "">("");
 
   useEffect(() => {
-    if (!open) return;
     let cancelled = false;
 
     const load = async () => {
@@ -50,7 +42,6 @@ export const ProviderSettingsButton: FC = () => {
 
       try {
         const userId = getClientRuntimeContext().userId;
-        // 优先从数据库加载（用户已保存过配置）
         const res = await fetch(
           `/api/settings/provider?userId=${encodeURIComponent(userId)}`,
         );
@@ -59,6 +50,7 @@ export const ProviderSettingsButton: FC = () => {
             providerName: string;
             baseUrl: string;
             model: string;
+            temperature?: number;
             maskedApiKey: string;
           };
           if (cancelled) return;
@@ -68,6 +60,10 @@ export const ProviderSettingsButton: FC = () => {
             baseUrl: data.baseUrl,
             apiKey: "",
             model: data.model,
+            temperature:
+              typeof data.temperature === "number"
+                ? data.temperature
+                : defaultForm.temperature,
           });
         }
       } catch {
@@ -78,7 +74,15 @@ export const ProviderSettingsButton: FC = () => {
         const local = await loadProviderLocal();
         if (cancelled) return;
         if (local) {
-          setForm({ ...local, apiKey: "" });
+          setForm((prev) => ({
+            ...prev,
+            ...local,
+            apiKey: "",
+            temperature:
+              typeof local.temperature === "number"
+                ? local.temperature
+                : prev.temperature,
+          }));
           setMaskedApiKey(local.apiKey ? "********" : "");
           setStoredApiKey(local.apiKey || "");
         }
@@ -90,8 +94,10 @@ export const ProviderSettingsButton: FC = () => {
     };
 
     void load();
-    return () => { cancelled = true; };
-  }, [open]);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const saveSettings = async () => {
     setSaving(true);
@@ -109,6 +115,7 @@ export const ProviderSettingsButton: FC = () => {
           baseUrl: form.baseUrl,
           apiKey: form.apiKey || storedApiKey,
           model: form.model,
+          temperature: form.temperature,
         }),
       });
 
@@ -123,12 +130,12 @@ export const ProviderSettingsButton: FC = () => {
         baseUrl: form.baseUrl,
         apiKey: form.apiKey || "",
         model: form.model,
+        temperature: form.temperature,
       });
 
       setForm((prev) => ({ ...prev, apiKey: "" }));
       setMessage(t("saved"));
       setMessageType("success");
-      setOpen(false)
     } catch (error) {
       setMessage(error instanceof Error ? error.message : t("saveFailed"));
       setMessageType("error");
@@ -172,32 +179,50 @@ export const ProviderSettingsButton: FC = () => {
   const disabled = loading || saving || testing;
 
   return (
-    <>
-      <TooltipIconButton
-        tooltip={t("tooltip")}
-        side="bottom"
-        variant="ghost"
-        size="icon"
-        className="text-muted-foreground hover:text-foreground hover:bg-muted-foreground/15 dark:border-muted-foreground/15 dark:hover:bg-muted-foreground/30 size-7 rounded-full active:scale-[0.96] motion-reduce:transition-none"
-        aria-label={t("tooltip")}
-        onClick={() => setOpen(true)}
-      >
-        <Settings2Icon className="size-4" />
-      </TooltipIconButton>
+    <div className="bg-background text-foreground min-h-screen">
+      <div className="mx-auto max-w-3xl px-4 py-8">
+        <div className="mb-6 flex items-center gap-3">
+          <Link
+            href="/"
+            className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1.5 text-sm transition-colors"
+          >
+            <ArrowLeftIcon className="size-4" />
+            {tr("backToChat")}
+          </Link>
+        </div>
 
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>{t("title")}</DialogTitle>
-            <DialogDescription>{t("description")}</DialogDescription>
-          </DialogHeader>
+        <div className="mb-8">
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {t("title")}
+          </h1>
+          <p className="text-muted-foreground mt-1 text-sm">
+            {t("description")}
+          </p>
+        </div>
 
-          <div className="grid gap-3">
+        {message && (
+          <p
+            className={`mb-4 text-sm ${
+              messageType === "error" ? "text-destructive" : "text-emerald-500"
+            }`}
+          >
+            {message}
+          </p>
+        )}
+
+        {loading ? (
+          <p className="text-muted-foreground text-sm">…</p>
+        ) : (
+          <div className="grid gap-4">
             <label className="grid gap-1.5">
-              <span className="text-xs text-muted-foreground">{t("providerName")}</span>
+              <span className="text-xs text-muted-foreground">
+                {t("providerName")}
+              </span>
               <input
                 value={form.providerName}
-                onChange={(e) => setForm((p) => ({ ...p, providerName: e.target.value }))}
+                onChange={(e) =>
+                  setForm((p) => ({ ...p, providerName: e.target.value }))
+                }
                 className="bg-background border-input h-9 rounded-md border px-2.5 text-sm outline-none"
                 placeholder="openai-compatible"
                 disabled={disabled}
@@ -205,10 +230,14 @@ export const ProviderSettingsButton: FC = () => {
             </label>
 
             <label className="grid gap-1.5">
-              <span className="text-xs text-muted-foreground">{t("baseUrl")}</span>
+              <span className="text-xs text-muted-foreground">
+                {t("baseUrl")}
+              </span>
               <input
                 value={form.baseUrl}
-                onChange={(e) => setForm((p) => ({ ...p, baseUrl: e.target.value }))}
+                onChange={(e) =>
+                  setForm((p) => ({ ...p, baseUrl: e.target.value }))
+                }
                 className="bg-background border-input h-9 rounded-md border px-2.5 text-sm outline-none"
                 placeholder="https://api.openai.com/v1"
                 disabled={disabled}
@@ -216,46 +245,81 @@ export const ProviderSettingsButton: FC = () => {
             </label>
 
             <label className="grid gap-1.5">
-              <span className="text-xs text-muted-foreground">{t("apiKey")}</span>
+              <span className="text-xs text-muted-foreground">
+                {t("apiKey")}
+              </span>
               <input
                 value={form.apiKey}
-                onChange={(e) => setForm((p) => ({ ...p, apiKey: e.target.value }))}
+                onChange={(e) =>
+                  setForm((p) => ({ ...p, apiKey: e.target.value }))
+                }
                 className="bg-background border-input h-9 rounded-md border px-2.5 text-sm outline-none"
                 placeholder={maskedApiKey || t("enterKey")}
-                type="password"
+                type="text"
                 autoComplete="off"
                 disabled={disabled}
               />
             </label>
 
             <label className="grid gap-1.5">
-              <span className="text-xs text-muted-foreground">{t("model")}</span>
+              <span className="text-xs text-muted-foreground">
+                {t("model")}
+              </span>
               <input
                 value={form.model}
-                onChange={(e) => setForm((p) => ({ ...p, model: e.target.value }))}
+                onChange={(e) =>
+                  setForm((p) => ({ ...p, model: e.target.value }))
+                }
                 className="bg-background border-input h-9 rounded-md border px-2.5 text-sm outline-none"
                 placeholder="gpt-5.6-luna"
                 disabled={disabled}
               />
             </label>
 
-            {message && (
-              <p className={messageType === "error" ? "text-destructive text-xs" : "text-emerald-500 text-xs"}>
-                {message}
-              </p>
-            )}
+            <div className="grid gap-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">
+                  {t("temperature")}
+                </span>
+                <span className="text-foreground text-xs font-medium tabular-nums">
+                  {form.temperature.toFixed(1)}
+                </span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={2}
+                step={0.1}
+                value={form.temperature}
+                onChange={(e) =>
+                  setForm((p) => ({
+                    ...p,
+                    temperature: Number(e.target.value),
+                  }))
+                }
+                className="accent-primary h-2 w-full cursor-pointer"
+                disabled={disabled}
+              />
+              <div className="text-muted-foreground flex justify-between text-[10px]">
+                <span>0（精确）</span>
+                <span>0.7</span>
+                <span>2（发散）</span>
+              </div>
+            </div>
           </div>
+        )}
 
-          <DialogFooter>
-            <Button variant="outline" onClick={testConnection} disabled={disabled}>
-              {testing ? t("testing") : t("test")}
-            </Button>
-            <Button onClick={saveSettings} disabled={disabled}>
-              {saving ? t("saving") : t("save")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
+        <div className="mt-6 flex items-center justify-end gap-2">
+          <Button variant="outline" onClick={testConnection} disabled={disabled}>
+            {testing ? t("testing") : t("test")}
+          </Button>
+          <Button onClick={saveSettings} disabled={disabled}>
+            {saving ? t("saving") : t("save")}
+          </Button>
+        </div>
+      </div>
+    </div>
   );
 };
+
+export default ProviderSettingsPage;

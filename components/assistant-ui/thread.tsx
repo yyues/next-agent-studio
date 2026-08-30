@@ -6,7 +6,7 @@ import {
 import { MarkdownText } from "@/components/assistant-ui/markdown-text";
 import { ToolFallback } from "@/components/assistant-ui/tool-fallback";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { ProviderSettingsButton } from "@/components/assistant-ui/provider-settings";
+import { DeepThinkingToggle } from "@/components/assistant-ui/deep-thinking-toggle";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -227,7 +227,7 @@ const ComposerAction: FC = () => {
     <div className="aui-composer-action-wrapper relative flex items-center justify-between">
       <div className="flex items-center gap-1.5">
         <ComposerAddAttachment />
-        <ProviderSettingsButton />
+        <DeepThinkingToggle />
       </div>
       <div className="flex items-center gap-1.5">
         <AuiIf condition={(s) => s.thread.capabilities.dictation}>
