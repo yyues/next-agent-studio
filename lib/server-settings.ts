@@ -1,4 +1,4 @@
-import { createOpenAI } from "@ai-sdk/openai";
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { generateText } from "ai";
 import { connectToMongo } from "@/lib/mongodb";
 import { ProviderConfigModel } from "@/lib/models/provider-config";
@@ -152,13 +152,13 @@ function maskApiKey(apiKey: string) {
 }
 
 function buildModel(config: ProviderSettings) {
-  const provider = createOpenAI({
+  const provider = createOpenAICompatible({
     name: config.providerName,
     baseURL: config.baseUrl,
     apiKey: config.apiKey,
   });
 
-  return provider.chat(config.model);
+  return provider.chatModel(config.model);
 }
 
 export async function getProviderSettings(userId: string) {

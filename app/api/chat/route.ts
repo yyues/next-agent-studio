@@ -10,6 +10,7 @@ import {
   normalizeUserId,
   resolveRuntimeConfig,
 } from "@/lib/server-settings";
+import { resolveReasoningOptions } from "@/lib/reasoning";
 
 export async function POST(req: Request) {
   const {
@@ -44,9 +45,14 @@ export async function POST(req: Request) {
     runtimeConfig.role.toolToggles,
   );
 
-  // 深度思考：追加分步推理指令（模型无关）。若模型原生支持 reasoning
-  // tokens，可在此改用 providerOptions.reasoning 等更细粒度控制。
-  const deepThinkingInstruction = deepThinking
+  // 深度思考：按 provider family 解析原生 reasoning 参数（OpenAI/
+  // Anthropic/通用各异），对未知 family 追加 prompt 指令兜底。
+  const reasoningOptions = resolveReasoningOptions({
+    deepThinking: deepThinking === true,
+    providerName: runtimeConfig.provider.providerName,
+    model: runtimeConfig.provider.model,
+  });
+  const deepThinkingInstruction = reasoningOptions.instructionFallback
     ? "在回答前请先进行深度思考与分步推理：先简述思路、拆解关键问题，再逐步推演，最后给出明确的最终结论。"
     : "";
 
@@ -66,6 +72,9 @@ export async function POST(req: Request) {
     tools: {
       ...frontendTools(activeTools),
     },
+    ...(reasoningOptions.providerOptions
+      ? { providerOptions: reasoningOptions.providerOptions }
+      : {}),
   });
 
   return result.toUIMessageStreamResponse({

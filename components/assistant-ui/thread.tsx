@@ -7,6 +7,7 @@ import { MarkdownText } from "@/components/assistant-ui/markdown-text";
 import { ToolFallback } from "@/components/assistant-ui/tool-fallback";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { DeepThinkingToggle } from "@/components/assistant-ui/deep-thinking-toggle";
+import { ThinkingIndicator } from "@/components/thinking-indicator";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -36,7 +37,7 @@ import {
   RefreshCwIcon,
   SquareIcon,
 } from "lucide-react";
-import type { FC } from "react";
+import { type FC, useEffect, useState } from "react";
 
 // Startup exposes a loading placeholder thread; treat it as a new chat so
 // the composer mounts centered. Loads after startup keep the docked layout.
@@ -305,6 +306,71 @@ const MessageError: FC = () => {
   );
 };
 
+/**
+ * 运行中的状态文案：优先提示正在执行的工具；否则在尚未产出可见文本（含
+ * reasoning token 流式阶段）时显示「深度思考中」；一旦有可见文本即返回
+ * undefined，让 ThinkingIndicator 退场。
+ */
+function useThinkingLabel() {
+  return useAuiState((s) => {
+    if (s.message.status?.type !== "running") return undefined;
+    const pending = s.message.parts.find(
+      (p) => p.type === "tool-call" && p.result === undefined,
+    );
+    if (pending?.type === "tool-call") return `调用 ${pending.toolName}`;
+    const hasText = s.message.parts.some(
+      (p) => p.type === "text" && p.text.length > 0,
+    );
+    return hasText ? undefined : "深度思考中";
+  });
+}
+
+function useElapsedLabel(active: boolean) {
+  const [label, setLabel] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    if (!active) {
+      setLabel(undefined);
+      return;
+    }
+    const start = Date.now();
+    setLabel("0s");
+    const id = setInterval(() => {
+      setLabel(`${Math.round((Date.now() - start) / 1000)}s`);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [active]);
+  return label;
+}
+
+const AssistantThinking: FC = () => {
+  const label = useThinkingLabel();
+  const elapsed = useElapsedLabel(label !== undefined);
+  if (label === undefined) return null;
+  return (
+    <div className="aui-assistant-thinking mb-1.5">
+      <ThinkingIndicator label={label} elapsed={elapsed} />
+    </div>
+  );
+};
+
+const ReasoningBlock: FC<{ text: string }> = ({ text }) => {
+  if (!text) return null;
+  return (
+    <details
+      className="aui-reasoning text-muted-foreground group my-2 rounded-lg border border-border/40 bg-muted/30 px-3 py-2 text-sm open:bg-muted/40"
+      open
+    >
+      <summary className="flex cursor-pointer select-none items-center gap-1.5 text-xs font-medium outline-none">
+        <ChevronRightIcon className="size-3.5 transition-transform group-open:rotate-90" />
+        思考过程
+      </summary>
+      <div className="mt-2 whitespace-pre-wrap text-[13px] leading-relaxed">
+        {text}
+      </div>
+    </details>
+  );
+};
+
 const AssistantMessage: FC = () => {
   const ACTION_BAR_PT = "pt-1.5";
   const ACTION_BAR_HEIGHT = `min-h-7.5 ${ACTION_BAR_PT}`;
@@ -319,30 +385,19 @@ const AssistantMessage: FC = () => {
         data-slot="aui_assistant-message-content"
         className="text-foreground px-2 leading-relaxed wrap-break-word"
       >
+        <AssistantThinking />
         <MessagePrimitive.Parts>
           {({ part }) => {
+            if (part.type === "reasoning")
+              return <ReasoningBlock text={part.text} />;
             if (part.type === "text") return <MarkdownText />;
             if (part.type === "tool-call")
               return part.toolUI ?? <ToolFallback {...part} />;
             return null;
           }}
         </MessagePrimitive.Parts>
-        <AuiIf
-          condition={(s) =>
-            s.message.status?.type === "running" && s.message.parts.length === 0
-          }
-        >
-          <span
-            data-slot="aui_assistant-message-indicator"
-            className="animate-pulse font-sans"
-            aria-label="Assistant is working"
-          >
-            {"●"}
-          </span>
-        </AuiIf>
         <MessageError />
       </div>
-
       <div
         data-slot="aui_assistant-message-footer"
         className={cn("ms-2 flex items-center", ACTION_BAR_HEIGHT)}

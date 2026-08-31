@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.46",
+    "@ai-sdk/openai-compatible": "^3.0.41",
     "@assistant-ui/ai-sdk": "latest",
     "@assistant-ui/react": "latest",
     "@assistant-ui/react-markdown": "latest",
