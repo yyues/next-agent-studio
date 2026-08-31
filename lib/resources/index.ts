@@ -7,9 +7,10 @@
 import { connectToMongo } from "@/lib/mongodb";
 import { RoleResourceModel } from "@/lib/models/role-resource";
 import { blobListPathnames, blobDel } from "@/lib/blob";
+import { deleteResourceChunks } from "@/lib/rag";
 
 /**
- * 删除角色的所有上传 resource：清理 Vercel Blob + MongoDB 记录。
+ * 删除角色的所有上传 resource：清理 Vercel Blob + MongoDB 记录 + RAG 切片。
  */
 export async function removeRoleResourceDir(roleId: string): Promise<void> {
   try {
@@ -23,5 +24,10 @@ export async function removeRoleResourceDir(roleId: string): Promise<void> {
     if (pathnames.length > 0) await blobDel(pathnames);
   } catch {
     // Blob 清理失败不阻断
+  }
+  try {
+    await deleteResourceChunks(roleId);
+  } catch {
+    // 切片清理失败不阻断
   }
 }

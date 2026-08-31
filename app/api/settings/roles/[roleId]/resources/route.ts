@@ -14,6 +14,8 @@ import AdmZip from "adm-zip";
 import { connectToMongo } from "@/lib/mongodb";
 import { RoleResourceModel } from "@/lib/models/role-resource";
 import { blobPut, blobListPathnames, blobDel } from "@/lib/blob";
+import { getProviderSettings, normalizeUserId } from "@/lib/server-settings";
+import { indexResourceFromBlob } from "@/lib/rag";
 
 function sanitizeName(name: string): string {
   return name
@@ -52,6 +54,10 @@ export async function POST(
 ) {
   try {
     const { roleId } = await params;
+    const url = new URL(req.url);
+    const userId = normalizeUserId(
+      url.searchParams.get("userId") ?? req.headers.get("x-user-id"),
+    );
 
     const formData = await req.formData();
     const file = formData.get("file");
@@ -120,7 +126,33 @@ export async function POST(
       { upsert: true, new: true, setDefaultsOnInsert: true },
     );
 
-    return NextResponse.json({ roleId, resourceId, fileName: file.name });
+    // 切片 + 向量化入库（RAG 索引）。失败不阻断上传，仅返回未索引标记。
+    let indexed = false;
+    let chunkCount = 0;
+    try {
+      const providerSettings = await getProviderSettings(userId);
+      const res = await indexResourceFromBlob(
+        roleId,
+        resourceId,
+        blobPrefix,
+        providerSettings.config,
+      );
+      indexed = true;
+      chunkCount = res.chunks;
+    } catch (err) {
+      console.warn(
+        `RAG indexing failed for ${roleId}/${resourceId}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+
+    return NextResponse.json({
+      roleId,
+      resourceId,
+      fileName: file.name,
+      indexed,
+      chunkCount,
+    });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to upload resource.";

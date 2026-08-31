@@ -8,6 +8,7 @@ import { NextResponse } from "next/server";
 import { connectToMongo } from "@/lib/mongodb";
 import { RoleResourceModel } from "@/lib/models/role-resource";
 import { blobListPathnames, blobDel } from "@/lib/blob";
+import { deleteResourceChunks } from "@/lib/rag";
 
 export async function DELETE(
   _req: Request,
@@ -32,6 +33,13 @@ export async function DELETE(
       if (pathnames.length > 0) await blobDel(pathnames);
     } catch {
       // Blob 已不存在则忽略
+    }
+
+    // 清理该资源的 RAG 切片向量
+    try {
+      await deleteResourceChunks(roleId, resourceId);
+    } catch {
+      // 切片清理失败不阻断删除
     }
 
     return NextResponse.json({ deleted: true, roleId, resourceId });

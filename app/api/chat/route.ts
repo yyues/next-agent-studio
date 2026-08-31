@@ -11,6 +11,26 @@ import {
   resolveRuntimeConfig,
 } from "@/lib/server-settings";
 import { resolveReasoningOptions } from "@/lib/reasoning";
+import { getRagContext } from "@/lib/rag";
+
+/**
+ * 从消息列表中提取最后一条用户消息的文本，作为 RAG 检索 query。
+ */
+function extractLastUserQuery(messages: UIMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role !== "user") continue;
+    const text = (msg.parts ?? [])
+      .filter(
+        (p): p is { type: "text"; text: string } =>
+          typeof p === "object" && p !== null && p.type === "text",
+      )
+      .map((p) => p.text)
+      .join("\n");
+    if (text.trim()) return text;
+  }
+  return "";
+}
 
 export async function POST(req: Request) {
   const {
@@ -56,8 +76,17 @@ export async function POST(req: Request) {
     ? "在回答前请先进行深度思考与分步推理：先简述思路、拆解关键问题，再逐步推演，最后给出明确的最终结论。"
     : "";
 
+  // RAG：用末条用户消息检索该角色知识库切片，注入 system prompt。
+  // 角色无资源或检索失败均返回空串，不影响对话。
+  const ragContext = await getRagContext(
+    runtimeConfig.role.roleId,
+    extractLastUserQuery(messages),
+    runtimeConfig.provider,
+  );
+
   const mergedSystemPrompt = [
     runtimeConfig.systemPrompt,
+    ragContext,
     system,
     deepThinkingInstruction,
   ]

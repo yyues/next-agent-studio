@@ -18,6 +18,9 @@ export type ProviderSettings = {
   baseUrl: string;
   apiKey: string;
   model: string;
+  embeddingModel: string;
+  embeddingBaseUrl: string;
+  embeddingApiKey: string;
   temperature: number;
 };
 
@@ -38,6 +41,10 @@ const defaultProviderSettings: ProviderSettings = {
   apiKey:
     process.env.DEFAULT_PROVIDER_API_KEY ?? process.env.OPENAI_API_KEY ?? "",
   model: process.env.DEFAULT_PROVIDER_MODEL ?? "gpt-5.6-luna",
+  embeddingModel:
+    process.env.DEFAULT_EMBEDDING_MODEL ?? "text-embedding-3-small",
+  embeddingBaseUrl: process.env.DEFAULT_EMBEDDING_BASE_URL ?? "",
+  embeddingApiKey: process.env.DEFAULT_EMBEDDING_API_KEY ?? "",
   temperature: Number(process.env.DEFAULT_PROVIDER_TEMPERATURE ?? 0.7),
 };
 
@@ -141,6 +148,10 @@ function normalizeProviderInput(
     baseUrl: payload.baseUrl!.trim(),
     apiKey: payload.apiKey!.trim(),
     model: payload.model!.trim(),
+    embeddingModel:
+      payload.embeddingModel?.trim() || defaultProviderSettings.embeddingModel,
+    embeddingBaseUrl: payload.embeddingBaseUrl?.trim() ?? "",
+    embeddingApiKey: payload.embeddingApiKey?.trim() ?? "",
     temperature,
   };
 }
@@ -171,6 +182,9 @@ export async function getProviderSettings(userId: string) {
         source: "default" as const,
         config: defaultProviderSettings,
         maskedApiKey: maskApiKey(defaultProviderSettings.apiKey),
+        maskedEmbeddingApiKey: maskApiKey(
+          defaultProviderSettings.embeddingApiKey,
+        ),
       };
     }
 
@@ -179,6 +193,10 @@ export async function getProviderSettings(userId: string) {
       baseUrl: doc.baseUrl,
       apiKey: doc.apiKey,
       model: doc.model,
+      embeddingModel:
+        doc.embeddingModel || defaultProviderSettings.embeddingModel,
+      embeddingBaseUrl: doc.embeddingBaseUrl ?? "",
+      embeddingApiKey: doc.embeddingApiKey ?? "",
       temperature:
         typeof doc.temperature === "number"
           ? doc.temperature
@@ -189,6 +207,7 @@ export async function getProviderSettings(userId: string) {
       source: "user" as const,
       config: saved,
       maskedApiKey: maskApiKey(saved.apiKey),
+      maskedEmbeddingApiKey: maskApiKey(saved.embeddingApiKey),
     };
   } catch (error) {
     console.warn(
@@ -199,6 +218,9 @@ export async function getProviderSettings(userId: string) {
       source: "default" as const,
       config: defaultProviderSettings,
       maskedApiKey: maskApiKey(defaultProviderSettings.apiKey),
+      maskedEmbeddingApiKey: maskApiKey(
+        defaultProviderSettings.embeddingApiKey,
+      ),
     };
   }
 }
@@ -215,6 +237,15 @@ export async function upsertProviderSettings(
     baseUrl: payload.baseUrl ?? existing.config.baseUrl,
     apiKey: payload.apiKey?.trim() ? payload.apiKey : existing.config.apiKey,
     model: payload.model ?? existing.config.model,
+    embeddingModel: payload.embeddingModel ?? existing.config.embeddingModel,
+    embeddingBaseUrl:
+      payload.embeddingBaseUrl !== undefined
+        ? payload.embeddingBaseUrl
+        : existing.config.embeddingBaseUrl,
+    embeddingApiKey:
+      payload.embeddingApiKey?.trim() !== ""
+        ? payload.embeddingApiKey
+        : existing.config.embeddingApiKey,
     temperature:
       typeof payload.temperature === "number"
         ? payload.temperature
@@ -236,6 +267,10 @@ export async function upsertProviderSettings(
     baseUrl: doc.baseUrl,
     apiKey: doc.apiKey,
     model: doc.model,
+    embeddingModel:
+      doc.embeddingModel || defaultProviderSettings.embeddingModel,
+    embeddingBaseUrl: doc.embeddingBaseUrl ?? "",
+    embeddingApiKey: doc.embeddingApiKey ?? "",
     temperature:
       typeof doc.temperature === "number"
         ? doc.temperature
@@ -246,6 +281,7 @@ export async function upsertProviderSettings(
     source: "user" as const,
     config: saved,
     maskedApiKey: maskApiKey(saved.apiKey),
+    maskedEmbeddingApiKey: maskApiKey(saved.embeddingApiKey),
   };
 }
 
@@ -366,6 +402,15 @@ export async function resolveRuntimeConfig(input: {
           input.overrideProvider.baseUrl ?? providerFromDb.config.baseUrl,
         apiKey: input.overrideProvider.apiKey ?? providerFromDb.config.apiKey,
         model: input.overrideProvider.model ?? providerFromDb.config.model,
+        embeddingModel:
+          input.overrideProvider.embeddingModel ??
+          providerFromDb.config.embeddingModel,
+        embeddingBaseUrl:
+          input.overrideProvider.embeddingBaseUrl ??
+          providerFromDb.config.embeddingBaseUrl,
+        embeddingApiKey:
+          input.overrideProvider.embeddingApiKey ??
+          providerFromDb.config.embeddingApiKey,
         temperature:
           typeof input.overrideProvider.temperature === "number"
             ? input.overrideProvider.temperature

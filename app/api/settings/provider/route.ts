@@ -20,8 +20,11 @@ export async function GET(req: Request) {
       providerName: result.config.providerName,
       baseUrl: result.config.baseUrl,
       model: result.config.model,
+      embeddingModel: result.config.embeddingModel,
+      embeddingBaseUrl: result.config.embeddingBaseUrl,
       temperature: result.config.temperature,
       maskedApiKey: result.maskedApiKey,
+      maskedEmbeddingApiKey: result.maskedEmbeddingApiKey,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to read provider settings.";
@@ -37,6 +40,9 @@ export async function PUT(req: Request) {
       baseUrl?: string;
       apiKey?: string;
       model?: string;
+      embeddingModel?: string;
+      embeddingBaseUrl?: string;
+      embeddingApiKey?: string;
       temperature?: number;
     };
 
@@ -47,6 +53,9 @@ export async function PUT(req: Request) {
       baseUrl: payload.baseUrl,
       apiKey: payload.apiKey,
       model: payload.model,
+      embeddingModel: payload.embeddingModel,
+      embeddingBaseUrl: payload.embeddingBaseUrl,
+      embeddingApiKey: payload.embeddingApiKey,
       temperature: payload.temperature,
     });
 
@@ -56,8 +65,11 @@ export async function PUT(req: Request) {
       providerName: result.config.providerName,
       baseUrl: result.config.baseUrl,
       model: result.config.model,
+      embeddingModel: result.config.embeddingModel,
+      embeddingBaseUrl: result.config.embeddingBaseUrl,
       temperature: result.config.temperature,
       maskedApiKey: result.maskedApiKey,
+      maskedEmbeddingApiKey: result.maskedEmbeddingApiKey,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to update provider settings.";
