@@ -603,6 +603,8 @@ export async function resolveRuntimeConfig(input: {
   userId: string;
   requestedRoleId?: string;
   overrideProvider?: Partial<ProviderSettings>;
+  /** 用户以 /命令 显式调用的技能名(小写);非空时仅注入命中的技能 */
+  invokedSkillCommands?: string[];
 }) {
   const providerFromDb = await getProviderSettings(input.userId);
   const provider = input.overrideProvider
@@ -646,7 +648,15 @@ export async function resolveRuntimeConfig(input: {
   // const validSkillIds = role.skillIds.filter((id) => availableSkillIds.includes(id));
   // 按角色加载 skills（从 skills/{roleId}/ 目录扫描）
   const loadedSkills = await loadSkillsByRoleId(roleId);
-  const skillInstruction = loadedSkills
+  // 显式 /命令 调用 → 仅注入命中技能(显式优先);未使用 / 时保持全量注入
+  const explicitCommands = (input.invokedSkillCommands ?? []).map((c) =>
+    c.toLowerCase(),
+  );
+  const effectiveSkills =
+    explicitCommands.length > 0
+      ? loadedSkills.filter((s) => explicitCommands.includes(s.id.toLowerCase()))
+      : loadedSkills;
+  const skillInstruction = effectiveSkills
     .map((skill) => {
       let text = `- ${skill.title}: ${skill.instructions}`;
       if (skill.knowledge && skill.knowledge.length > 0) {
@@ -658,7 +668,13 @@ export async function resolveRuntimeConfig(input: {
 
   const systemPrompt = [
     role.systemPrompt,
-    skillInstruction ? `Active skills:\n${skillInstruction}` : "",
+    skillInstruction
+      ? `${
+          explicitCommands.length > 0
+            ? "Explicitly invoked skills (用户以 /命令 显式调用,请优先按这些技能执行):"
+            : "Active skills:"
+        }\n${skillInstruction}`
+      : "",
   ]
     .filter(Boolean)
     .join("\n\n");

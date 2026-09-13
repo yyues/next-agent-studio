@@ -3,6 +3,7 @@ import {
   type JSONSchema7,
   streamText,
   convertToModelMessages,
+  type ToolSet,
   type UIMessage,
 } from "ai";
 import {
@@ -10,6 +11,7 @@ import {
   resolveRuntimeConfig,
 } from "@/lib/server-settings";
 import { getAuthUserId } from "@/lib/auth-request";
+import { extractCommandTokens } from "@/lib/slash-directive";
 import { resolveReasoningOptions } from "@/lib/reasoning";
 import { getRagContext } from "@/lib/rag";
 import {
@@ -64,9 +66,14 @@ export async function POST(req: Request) {
     userId ?? req.headers.get("x-user-id"),
   );
 
+  const lastUserQuery = extractLastUserQuery(messages);
+  // "/" 斜杠命令:显式调用技能(仅注入命中技能)与 MCP 服务器(强制连接)
+  const commandTokens = extractCommandTokens(lastUserQuery);
+
   const runtimeConfig = await resolveRuntimeConfig({
     userId: normalizedUserId,
     requestedRoleId: roleId,
+    invokedSkillCommands: commandTokens,
   });
 
   const activeTools = filterToolsByRole(
@@ -87,10 +94,10 @@ export async function POST(req: Request) {
 
   // RAG：用末条用户消息检索该角色知识库切片，注入 system prompt。
   // 角色无资源或检索失败均返回空串，不影响对话。
-  // MCP:加载角色配置的外部 MCP server 工具。消息中 @serverName 可强制启用。
-  // 未勾选任何 server 且无 @提及时,使用角色下所有 enabled 的 server。
+  // MCP:加载角色配置的外部 MCP server 工具。消息中 @serverName 可强制启用;
+  // "/server名称" 斜杠命令与 @ 提及同语义(未知名称不会命中任何 server,自然忽略)。
+  // 未勾选任何 server 且无提及时,使用角色下所有 enabled 的 server。
   // 单个 server 连接失败自动跳过,不阻断对话。
-  const lastUserQuery = extractLastUserQuery(messages);
   let mcpBundle: McpToolBundle = {
     tools: {},
     serverSummaries: [],
@@ -103,7 +110,10 @@ export async function POST(req: Request) {
       enabledServerIds: Array.isArray(mcpServerIds)
         ? mcpServerIds
         : undefined,
-      mentionNames: extractMcpMentions(lastUserQuery),
+      mentionNames: [
+        ...extractMcpMentions(lastUserQuery),
+        ...commandTokens,
+      ],
     });
   } catch (error) {
     console.warn("[chat] MCP tools load failed:", error);
@@ -145,7 +155,7 @@ export async function POST(req: Request) {
     tools: {
       ...frontendTools(activeTools),
       ...mcpBundle.tools,
-    },
+    } as ToolSet,
     ...(reasoningOptions.providerOptions
       ? { providerOptions: reasoningOptions.providerOptions }
       : {}),

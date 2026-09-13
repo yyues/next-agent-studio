@@ -12,6 +12,7 @@ import {
   FileText,
   Loader2Icon,
   AlertCircleIcon,
+  DownloadIcon,
 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import {
@@ -235,6 +236,76 @@ export const UserMessageAttachments: FC = () => {
         {() => <AttachmentUI />}
       </MessagePrimitive.Attachments>
     </div>
+  );
+};
+
+/**
+ * 模型返回的附件(AssistantMessage 的 file/image part):
+ * - 图片:内联展示(限高),点击新窗打开原图,可下载
+ * - 其他文件:文件行 tile(图标 + 文件名 + MIME),整行可下载
+ * data 可能是 url/dataURL(直接用)或裸 base64(按 mimeType 补前缀)。
+ */
+export const AssistantAttachment: FC<{
+  mimeType?: string;
+  filename?: string;
+  data?: string;
+  image?: string;
+}> = ({ mimeType, filename, data, image }) => {
+  const t = useTranslations("thread");
+  const raw = image ?? data ?? "";
+  if (!raw) return null;
+  const isUrl = /^(https?|data|blob):/i.test(raw);
+  const src = isUrl
+    ? raw
+    : `data:${mimeType ?? "application/octet-stream"};base64,${raw}`;
+  const isImage = Boolean(image) || (mimeType?.startsWith("image/") ?? false);
+
+  if (isImage) {
+    return (
+      <span className="my-1 block w-fit max-w-full">
+        <a
+          href={src}
+          download={filename}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="group block"
+          aria-label={filename ?? t("modelAttachment")}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={src}
+            alt={filename ?? t("modelAttachment")}
+            className="border-border/60 shadow-sm group-hover:border-primary/30 max-h-72 max-w-full rounded-xl border transition-[border-color,transform] duration-200 group-hover:scale-[1.01] motion-reduce:transition-none"
+          />
+        </a>
+        {filename && (
+          <span className="text-muted-foreground mt-1 block truncate text-xs">
+            {filename}
+          </span>
+        )}
+      </span>
+    );
+  }
+
+  return (
+    <a
+      href={src}
+      download={filename}
+      className="border-border/60 bg-card aui-lift my-1 flex max-w-xs items-center gap-2.5 rounded-xl border px-3 py-2.5"
+    >
+      <span className="bg-primary/10 text-primary flex size-9 shrink-0 items-center justify-center rounded-lg">
+        <FileText className="size-4" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-medium">
+          {filename ?? t("modelAttachment")}
+        </span>
+        <span className="text-muted-foreground block truncate text-xs">
+          {mimeType}
+        </span>
+      </span>
+      <DownloadIcon className="text-muted-foreground size-4 shrink-0" />
+    </a>
   );
 };
 

@@ -7,6 +7,12 @@ import { MarkdownText } from "@/components/assistant-ui/markdown-text";
 import { ToolFallback } from "@/components/assistant-ui/tool-fallback";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { ConversationTimeline } from "@/components/assistant-ui/conversation-timeline";
+import { ComposerSlash, LexicalSlashChip } from "@/components/assistant-ui/composer-slash";
+import { UserMessageText } from "@/components/assistant-ui/user-message-text";
+import { AssistantAttachment } from "@/components/assistant-ui/attachment";
+import { slashDirectiveFormatter } from "@/lib/slash-directive";
+import { LexicalComposerInput } from "@assistant-ui/react-lexical";
+import { ChipSpacingPlugin } from "@/components/assistant-ui/chip-spacing-plugin";
 import { DeepThinkingToggle } from "@/components/assistant-ui/deep-thinking-toggle";
 import { McpPicker } from "@/components/assistant-ui/mcp-picker";
 import { ThinkingIndicator } from "@/components/thinking-indicator";
@@ -217,24 +223,33 @@ const ThreadSuggestionItem: FC = () => {
 const Composer: FC = () => {
   const t = useTranslations("thread");
   return (
-    <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
-      <ComposerPrimitive.AttachmentDropzone asChild>
-        <div
-          data-slot="aui_composer-shell"
-          className="border-border/60 shadow-sm focus-within:border-primary/40 focus-within:shadow-[0_0_0_4px_color-mix(in_oklab,var(--color-primary)_10%,transparent)] data-[dragging=true]:border-ring dark:border-muted-foreground/15 dark:focus-within:border-primary/50 flex w-full cursor-text flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) transition-[border-color,box-shadow] duration-200 data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))] motion-reduce:transition-none"
-        >
-          <ComposerAttachments />
-          <ComposerPrimitive.Input
-            placeholder={t("placeholder")}
-            className="aui-composer-input placeholder:text-muted-foreground/60 max-h-64 min-h-[4.25rem] w-full resize-none bg-transparent px-2.5 py-2 text-base leading-6 outline-none"
-            rows={2}
-            autoFocus
-            aria-label="Message input"
-          />
-          <ComposerAction />
-        </div>
-      </ComposerPrimitive.AttachmentDropzone>
-    </ComposerPrimitive.Root>
+    <ComposerPrimitive.Unstable_TriggerPopoverRoot>
+      <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
+        {/* "/" 命令面板:锚定在输入框上方 */}
+        <ComposerSlash />
+        <ComposerPrimitive.AttachmentDropzone asChild>
+          <div
+            data-slot="aui_composer-shell"
+            className="border-border/60 shadow-sm focus-within:border-primary/40 focus-within:shadow-[0_0_0_4px_color-mix(in_oklab,var(--color-primary)_10%,transparent)] data-[dragging=true]:border-ring dark:border-muted-foreground/15 dark:focus-within:border-primary/50 flex w-full cursor-text flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) transition-[border-color,box-shadow] duration-200 data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))] motion-reduce:transition-none"
+          >
+            <ComposerAttachments />
+            {/* 官方 Lexical 富文本输入:/命令 渲染为原生内联 chip(可整体选中/删除/撤销) */}
+            <LexicalComposerInput
+              placeholder={t("placeholder")}
+              className="aui-composer-lexical max-h-64 min-h-[4.25rem] w-full overflow-y-auto px-2.5 py-2 text-base leading-7 outline-none"
+              autoFocus
+              aria-label="Message input"
+              formatter={slashDirectiveFormatter}
+              directiveChip={LexicalSlashChip}
+            >
+              {/* chip 插入末尾时补尾随空格,光标不贴边 */}
+              <ChipSpacingPlugin />
+            </LexicalComposerInput>
+            <ComposerAction />
+          </div>
+        </ComposerPrimitive.AttachmentDropzone>
+      </ComposerPrimitive.Root>
+    </ComposerPrimitive.Unstable_TriggerPopoverRoot>
   );
 };
 
@@ -413,6 +428,23 @@ const AssistantMessage: FC = () => {
             if (part.type === "text") return <MarkdownText />;
             if (part.type === "tool-call")
               return part.toolUI ?? <ToolFallback {...part} />;
+            // 模型返回的附件:图片内联展示,其他文件渲染为可下载 tile
+            if (part.type === "file")
+              return (
+                <AssistantAttachment
+                  data={part.data}
+                  mimeType={part.mimeType}
+                  filename={part.filename}
+                />
+              );
+            if (part.type === "image")
+              return (
+                <AssistantAttachment
+                  image={part.image}
+                  filename={part.filename}
+                  mimeType="image/*"
+                />
+              );
             return null;
           }}
         </MessagePrimitive.Parts>
@@ -492,7 +524,8 @@ const UserMessage: FC = () => {
 
       <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
         <div className="aui-user-message-content peer bg-primary/10 text-foreground border border-primary/15 dark:border-primary/20 rounded-2xl px-4 py-2.5 shadow-sm wrap-break-word empty:hidden">
-          <MessagePrimitive.Parts />
+          {/* Text 组件将 "/命令" 渲染为技能/MCP chip */}
+          <MessagePrimitive.Parts components={{ Text: UserMessageText }} />
         </div>
         <div className="aui-user-action-bar-wrapper absolute inset-s-0 top-1/2 -translate-x-full -translate-y-1/2 pe-2 peer-empty:hidden rtl:translate-x-full">
           <UserActionBar />

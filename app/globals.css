@@ -236,6 +236,38 @@
   transform: translateY(-1px);
 }
 
+/* Lexical 输入框:占位符与正文像素级对齐(锚定输入框容器,同 padding/行高) */
+.aui-composer-lexical {
+  position: relative;
+}
+.aui-lexical-placeholder {
+  color: color-mix(in oklab, var(--color-muted-foreground) 60%, transparent);
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  padding: 8px 10px;
+  font-size: 16px;
+  line-height: 28px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* 压制浏览器在 :focus-visible 上绘制的原生轮廓(红圈);
+   焦点可见性由外壳的 focus-within 边框/阴影提供 */
+.aui-composer-lexical [data-lexical-editor]:focus,
+.aui-composer-lexical [data-lexical-editor]:focus-visible,
+.aui-composer-lexical:focus-visible {
+  outline: none !important;
+}
+/* Lexical 指令 chip 宿主元素(实测 DOM:editor 内无类名 span 包裹自定义 chip):
+   边距/内边距加在宿主层,光标与后续文字才会与 chip 拉开间隙 */
+.aui-composer-lexical [data-lexical-editor] .aui-directive-chip,
+.aui-composer-lexical [data-lexical-editor] span:not([class]) {
+  display: inline-flex;
+  vertical-align: baseline;
+  margin-inline-start: 2px;
+  padding-inline-end: 4px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .aui-anim-item,
   .aui-anim-float,

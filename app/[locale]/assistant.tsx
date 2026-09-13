@@ -2,6 +2,11 @@
 
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import { useChatRuntime, AssistantChatTransport } from "@assistant-ui/ai-sdk";
+import {
+  CompositeAttachmentAdapter,
+  SimpleImageAttachmentAdapter,
+  SimpleTextAttachmentAdapter,
+} from "@assistant-ui/react";
 import { lastAssistantMessageIsCompleteWithToolCalls, type UIMessage } from "ai";
 import { Thread } from "@/components/assistant-ui/thread";
 import { getClientRuntimeContext } from "@/lib/client-runtime-context";
@@ -30,6 +35,14 @@ export const Assistant: FC<AssistantProps> = ({
 }) => {
   const runtime = useChatRuntime({
     sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
+    // 官方附件适配器:图片转 data URL(视觉输入),文本包成标签注入;
+    // 不配置时默认接受全部类型,多数模型会报错(官方文档警告)
+    adapters: {
+      attachments: new CompositeAttachmentAdapter([
+        new SimpleImageAttachmentAdapter(),
+        new SimpleTextAttachmentAdapter(),
+      ]),
+    },
     // AI SDK v5+ ChatInit 的初始消息键是 messages(v4 才叫 initialMessages,
     // 传错键名会被静默忽略,导致会话历史不渲染)
     ...(initialMessages && initialMessages.length > 0

@@ -56,7 +56,14 @@
     "timelineLabel": "对话时间线",
     "timelineYou": "你",
     "timelineAi": "AI",
-    "timelineEmpty": "（无文本内容）"
+    "timelineEmpty": "（无文本内容）",
+    "slashLabel": "命令面板",
+    "slashSkills": "技能",
+    "slashMcp": "MCP 服务器",
+    "slashEmpty": "没有匹配的命令",
+    "slashLoading": "正在加载命令…",
+    "slashChipHint": "命令",
+    "modelAttachment": "附件"
   },
   "settings": {
     "title": "模型供应商",

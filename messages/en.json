@@ -56,7 +56,14 @@
     "timelineLabel": "Conversation timeline",
     "timelineYou": "You",
     "timelineAi": "AI",
-    "timelineEmpty": "(no text)"
+    "timelineEmpty": "(no text)",
+    "slashLabel": "Command palette",
+    "slashSkills": "Skills",
+    "slashMcp": "MCP servers",
+    "slashEmpty": "No matching commands",
+    "slashLoading": "Loading commands…",
+    "slashChipHint": "command",
+    "modelAttachment": "Attachment"
   },
   "settings": {
     "title": "Model Providers",
