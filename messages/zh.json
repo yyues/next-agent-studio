@@ -52,7 +52,11 @@
     "uploadFailed": "上传失败",
     "removeFile": "移除文件",
     "addAttachment": "添加附件",
-    "imagePreview": "图片预览"
+    "imagePreview": "图片预览",
+    "timelineLabel": "对话时间线",
+    "timelineYou": "你",
+    "timelineAi": "AI",
+    "timelineEmpty": "（无文本内容）"
   },
   "settings": {
     "title": "模型供应商",

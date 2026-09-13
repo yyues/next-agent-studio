@@ -266,7 +266,7 @@ export const ConversationSidebar: FC<{
             className="bg-black/40 absolute inset-0 backdrop-blur-[2px]"
             onClick={onCloseMobile}
           />
-          <aside className="bg-card aui-anim-item absolute inset-y-0 left-0 flex w-72 flex-col p-3 shadow-xl">
+          <aside className="aui-anim-item bg-card absolute inset-y-0 left-0 flex w-72 flex-col p-3 shadow-xl">
             {list}
           </aside>
         </div>

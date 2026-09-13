@@ -52,7 +52,11 @@
     "uploadFailed": "Upload failed",
     "removeFile": "Remove file",
     "addAttachment": "Add Attachment",
-    "imagePreview": "Image preview"
+    "imagePreview": "Image preview",
+    "timelineLabel": "Conversation timeline",
+    "timelineYou": "You",
+    "timelineAi": "AI",
+    "timelineEmpty": "(no text)"
   },
   "settings": {
     "title": "Model Providers",

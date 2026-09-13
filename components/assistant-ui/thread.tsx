@@ -6,6 +6,7 @@ import {
 import { MarkdownText } from "@/components/assistant-ui/markdown-text";
 import { ToolFallback } from "@/components/assistant-ui/tool-fallback";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { ConversationTimeline } from "@/components/assistant-ui/conversation-timeline";
 import { DeepThinkingToggle } from "@/components/assistant-ui/deep-thinking-toggle";
 import { McpPicker } from "@/components/assistant-ui/mcp-picker";
 import { ThinkingIndicator } from "@/components/thinking-indicator";
@@ -85,14 +86,16 @@ export const Thread: FC = () => {
 
   return (
     <ThreadPrimitive.Root
-      className="aui-root aui-thread-root bg-background @container flex h-full flex-col"
+      className="aui-root aui-thread-root bg-background @container relative flex h-full flex-col"
       style={{
         // 消息列宽由 globals.css 的 .aui-thread-root 按断点自适应(44/52/60rem)
         ["--composer-bg" as string]: "var(--color-card)",
         ["--composer-radius" as string]: "1.5rem",
-        ["--composer-padding" as string]: "8px",
+        ["--composer-padding" as string]: "12px",
       }}
     >
+      {/* 对话缩略时间线:每横线一条消息,悬停预览,点击定位 */}
+      <ConversationTimeline />
       <ThreadPrimitive.Viewport
         turnAnchor="top"
         data-slot="aui_thread-viewport"
@@ -223,8 +226,8 @@ const Composer: FC = () => {
           <ComposerAttachments />
           <ComposerPrimitive.Input
             placeholder={t("placeholder")}
-            className="aui-composer-input placeholder:text-muted-foreground/60 max-h-48 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base leading-6 outline-none"
-            rows={1}
+            className="aui-composer-input placeholder:text-muted-foreground/60 max-h-64 min-h-[4.25rem] w-full resize-none bg-transparent px-2.5 py-2 text-base leading-6 outline-none"
+            rows={2}
             autoFocus
             aria-label="Message input"
           />
@@ -389,11 +392,13 @@ const ReasoningBlock: FC<{ text: string }> = ({ text }) => {
 const AssistantMessage: FC = () => {
   const ACTION_BAR_PT = "pt-1.5";
   const ACTION_BAR_HEIGHT = `min-h-7.5 ${ACTION_BAR_PT}`;
+  const msgId = useAuiState((s) => s.message.id);
 
   return (
     <MessagePrimitive.Root
       data-slot="aui_assistant-message-root"
       data-role="assistant"
+      id={`aui-msg-${msgId}`}
       className="fade-in slide-in-from-bottom-1 animate-in relative -mb-7.5 pb-7.5 duration-150 [contain-intrinsic-size:auto_200px] [content-visibility:auto]"
     >
       <div
@@ -475,9 +480,11 @@ const AssistantActionBar: FC = () => {
 };
 
 const UserMessage: FC = () => {
+  const msgId = useAuiState((s) => s.message.id);
   return (
     <MessagePrimitive.Root
       data-slot="aui_user-message-root"
+      id={`aui-msg-${msgId}`}
       className="fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 duration-150 [contain-intrinsic-size:auto_200px] [content-visibility:auto] [&:where(>*)]:col-start-2"
       data-role="user"
     >
