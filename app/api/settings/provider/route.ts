@@ -1,14 +1,15 @@
 import { NextResponse } from "next/server";
+import { getAuthUserId } from "@/lib/auth-request";
 import {
   getProviderSettings,
-  normalizeUserId,
   upsertProviderSettings,
 } from "@/lib/server-settings";
 
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
-    const userId = normalizeUserId(
+    const userId = await getAuthUserId(
+      req,
       searchParams.get("userId") ?? req.headers.get("x-user-id"),
     );
 
@@ -46,7 +47,7 @@ export async function PUT(req: Request) {
       temperature?: number;
     };
 
-    const userId = normalizeUserId(payload.userId ?? req.headers.get("x-user-id"));
+    const userId = await getAuthUserId(req, payload.userId ?? req.headers.get("x-user-id"));
 
     const result = await upsertProviderSettings(userId, {
       providerName: payload.providerName,

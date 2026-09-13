@@ -169,10 +169,14 @@ skills/{roleId}/{skillId}/     # 内置 skill（仓库提交）
 3. `chatId` 作为 `Assistant` 的 key 触发 remount，重置会话上下文。
 4. 新会话首次请求带上新 `roleId`，服务端 `resolveRuntimeConfig` 解析到新角色。
 
-### 4.4 Provider 设置流程
-1. 设置页加载：`GET /api/settings/provider?userId=...` 取 DB 配置；DB 不可用时回退本地加密存储 `loadProviderLocal`。
-2. 保存：`PUT /api/settings/provider`（body 含 `embeddingModel`）→ `upsertProviderSettings` 校验+归一+upsert；同时 `saveProviderLocal` 加密备份到 localStorage。
-3. 测试连接：`POST /api/settings/provider/test` 用配置 `generateText` 探活。
+### 4.4 Provider 设置流程（多供应商，全部持久化 MongoDB `assistant_demo.providerentries`，无 localStorage 路径）
+1. 列表：`GET /api/settings/providers`（userId 取自登录 cookie，apiKey 仅返回掩码）。
+2. 新建/更新：`POST|PUT /api/settings/providers[/providerId]` → `upsertProviderEntry` upsert 到 `providerentries`（apiKey 留空沿用旧值；首个供应商自动激活）。
+3. 激活/删除：`PATCH|DELETE /api/settings/providers/[providerId]`；删除激活项后自动激活剩余第一个。
+4. 内置 Embedding（不属于供应商）：`GET|PUT /api/settings/embedding`，存全局 `providerconfigs`，模型固定不可改。
+5. 旧 `GET /api/settings/provider` 保留兼容：返回激活供应商拼出的 ProviderSettings。
+6. 测试连接：`POST /api/settings/providers/[providerId]/test` 用配置 `generateText` 探活。
+7. 回归测试：`pnpm test:provider`（需 dev server 运行，覆盖 增→查库→隔离→改→删 全链路）。
 
 ### 4.5 角色管理流程
 1. 列表 `GET /api/settings/roles?userId=...`：`getRoleSettings` seed 内置角色 + 合并 DB 角色 + 按优先级排序 + 返回 `currentRoleId`。

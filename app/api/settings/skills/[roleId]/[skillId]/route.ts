@@ -9,11 +9,28 @@ import { NextResponse } from "next/server";
 import { connectToMongo } from "@/lib/mongodb";
 import { SkillDocModel } from "@/lib/models/skill-doc";
 import { blobDel, blobListPathnames } from "@/lib/blob";
+import { getAuthUserId } from "@/lib/auth-request";
+import { assertRoleAccess } from "@/lib/server-settings";
 
 export async function DELETE(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ roleId: string; skillId: string }> },
 ) {
+  // ownership 守卫:内置角色共享,自定义角色必须属于调用者
+  try {
+    const { roleId } = await params;
+    const caller = await getAuthUserId(
+      req,
+      new URL(req.url).searchParams.get("userId"),
+    );
+    await assertRoleAccess(caller, roleId);
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : "Access denied." },
+      { status: 403 },
+    );
+  }
+
   try {
     const { roleId, skillId } = await params;
 

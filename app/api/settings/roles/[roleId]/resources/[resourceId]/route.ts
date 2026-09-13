@@ -5,15 +5,32 @@
  * 2. 删除 Vercel Blob 中该资源的所有文件（按 blobPrefix 前缀）
  */
 import { NextResponse } from "next/server";
+import { getAuthUserId } from "@/lib/auth-request";
+import { assertRoleAccess } from "@/lib/server-settings";
 import { connectToMongo } from "@/lib/mongodb";
 import { RoleResourceModel } from "@/lib/models/role-resource";
 import { blobListPathnames, blobDel } from "@/lib/blob";
 import { deleteResourceChunks } from "@/lib/rag";
 
 export async function DELETE(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ roleId: string; resourceId: string }> },
 ) {
+  // ownership 守卫:内置角色共享,自定义角色必须属于调用者
+  try {
+    const { roleId } = await params;
+    const caller = await getAuthUserId(
+      req,
+      new URL(req.url).searchParams.get("userId"),
+    );
+    await assertRoleAccess(caller, roleId);
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : "Access denied." },
+      { status: 403 },
+    );
+  }
+
   try {
     const { roleId, resourceId } = await params;
 

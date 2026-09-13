@@ -13,8 +13,8 @@ type SettingsMenuProps = {
 
 /**
  * 左上角设置区：内联角色切换器（显示+切换） + 齿轮（icon-only）弹出菜单。
- * 菜单含「角色管理」「Provider 管理」：前者跳转 /admin/roles 页面，
- * 后者跳转 /settings/provider 页面。
+ * 菜单含「角色管理」「Provider 管理」：分别深链到统一设置页
+ * /settings?tab=roles 与 /settings?tab=providers。
  */
 export const SettingsMenu: FC<SettingsMenuProps> = ({ onRoleSwitch }) => {
   const router = useRouter();
@@ -36,11 +36,11 @@ export const SettingsMenu: FC<SettingsMenuProps> = ({ onRoleSwitch }) => {
 
   const openRoleMgmt = () => {
     setMenuOpen(false);
-    router.push("/admin/roles");
+    router.push("/settings?tab=roles");
   };
   const openProvider = () => {
     setMenuOpen(false);
-    router.push("/settings/provider");
+    router.push("/settings?tab=providers");
   };
 
   return (
@@ -62,7 +62,7 @@ export const SettingsMenu: FC<SettingsMenuProps> = ({ onRoleSwitch }) => {
         {menuOpen && (
           <div
             role="menu"
-            className="bg-popover text-popover-foreground border-border shadow-lg absolute left-0 top-full z-50 mt-1 min-w-40 rounded-lg border p-1"
+            className="bg-popover text-popover-foreground border-border shadow-lg absolute right-0 top-full z-50 mt-1 min-w-40 rounded-lg border p-1"
           >
             <button
               type="button"

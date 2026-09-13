@@ -7,9 +7,9 @@ import {
 } from "ai";
 import {
   filterToolsByRole,
-  normalizeUserId,
   resolveRuntimeConfig,
 } from "@/lib/server-settings";
+import { getAuthUserId } from "@/lib/auth-request";
 import { resolveReasoningOptions } from "@/lib/reasoning";
 import { getRagContext } from "@/lib/rag";
 import {
@@ -59,7 +59,8 @@ export async function POST(req: Request) {
     mcpServerIds?: string[];
   } = await req.json();
 
-  const normalizedUserId = normalizeUserId(
+  const normalizedUserId = await getAuthUserId(
+    req,
     userId ?? req.headers.get("x-user-id"),
   );
 

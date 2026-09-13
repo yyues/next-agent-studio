@@ -36,6 +36,7 @@ import {
   MoreHorizontalIcon,
   PencilIcon,
   RefreshCwIcon,
+  SparklesIcon,
   SquareIcon,
 } from "lucide-react";
 import { type FC, useEffect, useState } from "react";
@@ -86,7 +87,7 @@ export const Thread: FC = () => {
     <ThreadPrimitive.Root
       className="aui-root aui-thread-root bg-background @container flex h-full flex-col"
       style={{
-        ["--thread-max-width" as string]: "44rem",
+        // 消息列宽由 globals.css 的 .aui-thread-root 按断点自适应(44/52/60rem)
         ["--composer-bg" as string]: "var(--color-card)",
         ["--composer-radius" as string]: "1.5rem",
         ["--composer-padding" as string]: "8px",
@@ -165,8 +166,19 @@ const ThreadScrollToBottom: FC = () => {
 const ThreadWelcome: FC = () => {
   const t = useTranslations("thread");
   return (
-    <div className="aui-thread-welcome-root mb-6 flex flex-col items-center px-4 text-center">
-      <h1 className="aui-thread-welcome-message-inner fade-in slide-in-from-bottom-1 animate-in fill-mode-both text-2xl font-medium tracking-tight duration-200">
+    <div className="aui-thread-welcome-root relative mb-6 flex flex-col items-center px-4 py-8 text-center">
+      {/* 装饰光晕(纯背景,不拦截交互) */}
+      <div
+        aria-hidden
+        className="from-primary/10 via-chart-4/10 pointer-events-none absolute top-1/2 left-1/2 h-64 w-[36rem] max-w-full -translate-x-1/2 -translate-y-1/2 rounded-full bg-gradient-to-r to-transparent blur-3xl"
+      />
+      <span
+        aria-hidden
+        className="aui-anim-float bg-primary/10 text-primary relative mb-4 flex size-12 items-center justify-center rounded-2xl"
+      >
+        <SparklesIcon className="size-5" />
+      </span>
+      <h1 className="aui-thread-welcome-message-inner aui-grad-text fade-in slide-in-from-bottom-1 animate-in fill-mode-both relative text-3xl font-semibold tracking-tight duration-300">
         {t("welcome")}
       </h1>
     </div>
@@ -189,7 +201,7 @@ const ThreadSuggestionItem: FC = () => {
       <SuggestionPrimitive.Trigger send asChild>
         <Button
           variant="ghost"
-          className="aui-thread-welcome-suggestion text-foreground hover:bg-muted border-border/60 h-auto gap-1.5 rounded-full border px-3.5 py-1.5 text-sm font-normal whitespace-nowrap transition-colors"
+          className="aui-thread-welcome-suggestion aui-lift text-foreground hover:bg-muted hover:shadow-md border-border/60 h-auto gap-1.5 rounded-full border px-3.5 py-1.5 text-sm font-normal whitespace-nowrap active:scale-[0.98] motion-reduce:transition-none"
         >
           <SuggestionPrimitive.Title className="aui-thread-welcome-suggestion-text-1" />
           <SuggestionPrimitive.Description className="aui-thread-welcome-suggestion-text-2 empty:hidden" />
@@ -206,7 +218,7 @@ const Composer: FC = () => {
       <ComposerPrimitive.AttachmentDropzone asChild>
         <div
           data-slot="aui_composer-shell"
-          className="border-border/60 data-[dragging=true]:border-ring focus-within:border-border dark:border-muted-foreground/15 dark:focus-within:border-muted-foreground/30 flex w-full cursor-text flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) transition-[border-color] data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))]"
+          className="border-border/60 shadow-sm focus-within:border-primary/40 focus-within:shadow-[0_0_0_4px_color-mix(in_oklab,var(--color-primary)_10%,transparent)] data-[dragging=true]:border-ring dark:border-muted-foreground/15 dark:focus-within:border-primary/50 flex w-full cursor-text flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) transition-[border-color,box-shadow] duration-200 data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))] motion-reduce:transition-none"
         >
           <ComposerAttachments />
           <ComposerPrimitive.Input
@@ -360,7 +372,7 @@ const ReasoningBlock: FC<{ text: string }> = ({ text }) => {
   if (!text) return null;
   return (
     <details
-      className="aui-reasoning text-muted-foreground group my-2 rounded-lg border border-border/40 bg-muted/30 px-3 py-2 text-sm open:bg-muted/40"
+      className="aui-reasoning text-muted-foreground group my-2 rounded-xl border border-border/40 bg-muted/30 px-3.5 py-2.5 text-sm open:bg-muted/40"
       open
     >
       <summary className="flex cursor-pointer select-none items-center gap-1.5 text-xs font-medium outline-none">
@@ -472,7 +484,7 @@ const UserMessage: FC = () => {
       <UserMessageAttachments />
 
       <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
-        <div className="aui-user-message-content peer bg-muted text-foreground rounded-xl px-4 py-2 wrap-break-word empty:hidden">
+        <div className="aui-user-message-content peer bg-primary/10 text-foreground border border-primary/15 dark:border-primary/20 rounded-2xl px-4 py-2.5 shadow-sm wrap-break-word empty:hidden">
           <MessagePrimitive.Parts />
         </div>
         <div className="aui-user-action-bar-wrapper absolute inset-s-0 top-1/2 -translate-x-full -translate-y-1/2 pe-2 peer-empty:hidden rtl:translate-x-full">

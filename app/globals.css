@@ -147,3 +147,114 @@
     font-optical-sizing: auto;
   }
 }
+
+/* ---------- 会话页动效(遵循 150-300ms、transform/opacity only) ---------- */
+
+/* 消息列宽自适应:基础 44rem,大屏逐档放宽(保持 60-75 字符可读行宽的上限内) */
+.aui-thread-root {
+  --thread-max-width: 44rem;
+}
+@media (min-width: 1280px) {
+  .aui-thread-root {
+    --thread-max-width: 52rem;
+  }
+}
+@media (min-width: 1536px) {
+  .aui-thread-root {
+    --thread-max-width: 60rem;
+  }
+}
+
+@keyframes aui-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes aui-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes aui-grad-pan {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+/* 列表项入场(配合 inline animation-delay 做 30ms 交错) */
+.aui-anim-item {
+  animation: aui-fade-up 260ms ease-out both;
+}
+
+/* 品牌图标轻微漂浮 */
+.aui-anim-float {
+  animation: aui-float 5s ease-in-out infinite;
+}
+
+/* 流动渐变文字(welcome 标题 / 品牌名) */
+.aui-grad-text {
+  background-image: linear-gradient(
+    110deg,
+    var(--primary),
+    var(--chart-4),
+    var(--chart-1),
+    var(--primary)
+  );
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: aui-grad-pan 9s ease-in-out infinite;
+}
+
+/* 交互卡片 hover 抬升 */
+.aui-lift {
+  transition:
+    transform 200ms ease-out,
+    box-shadow 200ms ease-out,
+    border-color 200ms ease-out,
+    background-color 200ms ease-out;
+}
+.aui-lift:hover {
+  transform: translateY(-1px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aui-anim-item,
+  .aui-anim-float,
+  .aui-grad-text {
+    animation: none;
+  }
+  .aui-anim-item {
+    opacity: 1;
+    transform: none;
+  }
+  .aui-grad-text {
+    color: var(--primary);
+    background: none;
+    -webkit-background-clip: initial;
+    background-clip: initial;
+  }
+  .aui-lift,
+  .aui-lift:hover {
+    transition: none;
+    transform: none;
+  }
+}

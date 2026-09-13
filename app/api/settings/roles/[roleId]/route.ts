@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { normalizeUserId, updateRole, deleteRole, getRoleById } from "@/lib/server-settings";
+import { updateRole, deleteRole, getRoleById } from "@/lib/server-settings";
+import { getAuthUserId } from "@/lib/auth-request";
 
 export async function GET(
   req: Request,
@@ -8,7 +9,8 @@ export async function GET(
   try {
     const { roleId } = await params;
     const url = new URL(req.url);
-    const userId = normalizeUserId(
+    const userId = await getAuthUserId(
+      req,
       url.searchParams.get("userId") ?? req.headers.get("x-user-id"),
     );
 
@@ -36,7 +38,7 @@ export async function PUT(
       priority?: number;
     };
 
-    const userId = normalizeUserId(payload.userId ?? req.headers.get("x-user-id"));
+    const userId = await getAuthUserId(req, payload.userId ?? req.headers.get("x-user-id"));
     const role = await updateRole(userId, roleId, {
       displayName: payload.displayName,
       description: payload.description,
@@ -59,7 +61,8 @@ export async function DELETE(
   try {
     const { roleId } = await params;
     const url = new URL(req.url);
-    const userId = normalizeUserId(
+    const userId = await getAuthUserId(
+      req,
       url.searchParams.get("userId") ?? req.headers.get("x-user-id"),
     );
 

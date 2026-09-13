@@ -137,12 +137,12 @@ export const ConversationSidebar: FC<{
 
   const list = (
     <>
-      {/* 品牌区:系统 icon + 标题 */}
-      <div className="mb-3 flex items-center gap-2 px-1 py-1">
-        <span className="bg-primary/10 text-primary flex size-7 shrink-0 items-center justify-center rounded-lg">
-          <BotIcon className="size-4" />
+      {/* 品牌区:渐变图标 + 流动渐变标题(静态垂直居中,不加漂浮动画) */}
+      <div className="mb-3 flex items-center gap-2.5 px-1 py-1">
+        <span className="from-primary to-chart-4 flex size-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br shadow-sm">
+          <BotIcon className="size-4 text-white dark:text-primary-foreground" />
         </span>
-        <span className="truncate text-sm font-semibold tracking-tight">
+        <span className="aui-grad-text truncate text-sm leading-none font-semibold tracking-tight">
           {appTitle}
         </span>
       </div>
@@ -150,7 +150,7 @@ export const ConversationSidebar: FC<{
       <button
         type="button"
         onClick={startNewChat}
-        className="flex w-full items-center gap-2 rounded-md border border-dashed border-border px-3 py-2 text-sm transition-colors hover:bg-muted"
+        className="aui-lift bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.99] flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium shadow-sm"
       >
         <PlusIcon className="size-4" />
         {t("newChat")}
@@ -162,30 +162,36 @@ export const ConversationSidebar: FC<{
             {t("noThreads")}
           </p>
         ) : (
-          conversations.map((item) => {
+          conversations.map((item, index) => {
             const active = item.conversationId === currentChatId;
             const renaming = renamingId === item.conversationId;
             return (
               <div
                 key={item.conversationId}
+                style={{ animationDelay: `${Math.min(index, 12) * 30}ms` }}
                 className={cn(
-                  "group flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors",
+                  "aui-anim-item group relative flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm transition-colors duration-200",
                   active
-                    ? "bg-primary/10 text-primary"
+                    ? "bg-primary/10 text-primary font-medium"
                     : "hover:bg-muted text-foreground/90",
                 )}
               >
+                {/* 当前会话左侧指示条 */}
+                {active && (
+                  <span className="bg-primary absolute start-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full" />
+                )}
                 {renaming ? (
                   <>
                     <input
                       autoFocus
                       value={renameValue}
+                      autoComplete="off"
                       onChange={(e) => setRenameValue(e.target.value)}
                       onKeyDown={(e) => {
                         if (e.key === "Enter") void submitRename(item);
                         if (e.key === "Escape") setRenamingId(null);
                       }}
-                      className="bg-background h-7 min-w-0 flex-1 rounded border px-1.5 text-sm outline-none"
+                      className="bg-background border-input h-7 min-w-0 flex-1 rounded border px-1.5 text-sm outline-none"
                     />
                     <button
                       type="button"
@@ -207,7 +213,7 @@ export const ConversationSidebar: FC<{
                     <button
                       type="button"
                       onClick={() => switchTo(item.conversationId)}
-                      className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                      className="hover:group-hover/item:translate-x-0.5 flex min-w-0 flex-1 items-center gap-2 py-0.5 text-left transition-transform duration-200"
                       title={item.title || item.conversationId}
                     >
                       <MessageSquareIcon className="size-3.5 shrink-0 opacity-60" />
@@ -222,7 +228,7 @@ export const ConversationSidebar: FC<{
                           setRenamingId(item.conversationId);
                           setRenameValue(item.title);
                         }}
-                        className="text-muted-foreground hover:text-foreground"
+                        className="text-muted-foreground hover:text-foreground mr-1"
                         title={t("renameThread")}
                       >
                         <PencilIcon className="size-3" />
@@ -249,7 +255,7 @@ export const ConversationSidebar: FC<{
   return (
     <>
       {/* 桌面侧边栏 */}
-      <aside className="bg-card/50 hidden h-full w-60 shrink-0 flex-col border-r border-border/60 p-3 md:flex">
+      <aside className="bg-card/60 hidden h-full w-60 shrink-0 flex-col border-r border-border/60 p-3 backdrop-blur-sm md:flex">
         {list}
       </aside>
 
@@ -257,10 +263,10 @@ export const ConversationSidebar: FC<{
       {mobileOpen && (
         <div className="fixed inset-0 z-50 md:hidden">
           <div
-            className="bg-black/40 absolute inset-0"
+            className="bg-black/40 absolute inset-0 backdrop-blur-[2px]"
             onClick={onCloseMobile}
           />
-          <aside className="bg-card absolute inset-y-0 left-0 flex w-72 flex-col p-3 shadow-xl">
+          <aside className="bg-card aui-anim-item absolute inset-y-0 left-0 flex w-72 flex-col p-3 shadow-xl">
             {list}
           </aside>
         </div>

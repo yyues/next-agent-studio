@@ -4,7 +4,7 @@
  * PUT  /api/settings/roles/[roleId]/mcp?serverId=xxx — 连通性测试
  */
 import { NextResponse } from "next/server";
-import { normalizeUserId } from "@/lib/server-settings";
+import { getAuthUserId } from "@/lib/auth-request";
 import {
   listMcpServers,
   upsertMcpServer,
@@ -13,9 +13,10 @@ import {
 
 function getUserId(req: Request) {
   const url = new URL(req.url);
-  return normalizeUserId(
-    url.searchParams.get("userId") ?? req.headers.get("x-user-id"),
-  );
+  return getAuthUserId(
+      req,
+      url.searchParams.get("userId") ?? req.headers.get("x-user-id"),
+    );
 }
 
 export async function GET(
@@ -24,7 +25,8 @@ export async function GET(
 ) {
   try {
     const { roleId } = await params;
-    const servers = await listMcpServers(getUserId(req), roleId);
+    const uid = await getUserId(req);
+    const servers = await listMcpServers(uid, roleId);
     return NextResponse.json({
       servers: servers.map(({ headers, ...rest }) => ({
         ...rest,
@@ -44,7 +46,7 @@ export async function POST(
 ) {
   try {
     const { roleId } = await params;
-    const userId = getUserId(req);
+    const userId = await getUserId(req);
     const body = (await req.json()) as {
       serverId?: string;
       name: string;
@@ -52,7 +54,8 @@ export async function POST(
       headers?: Record<string, string>;
       enabled?: boolean;
     };
-    const server = await upsertMcpServer(userId, roleId, body);
+    const uid = await getUserId(req);
+    const server = await upsertMcpServer(uid, roleId, body);
     const { headers, ...rest } = server;
     return NextResponse.json({ server: { ...rest, headerKeys: Object.keys(headers) } });
   } catch (error) {

@@ -1,17 +1,18 @@
 import { NextResponse } from "next/server";
 import {
   getRoleSettings,
-  normalizeUserId,
   setCurrentRole,
 } from "@/lib/server-settings";
+import { getAuthUserId } from "@/lib/auth-request";
+
+function fallbackUserId(req: Request) {
+  const { searchParams } = new URL(req.url);
+  return searchParams.get("userId") ?? req.headers.get("x-user-id") ?? undefined;
+}
 
 export async function GET(req: Request) {
   try {
-    const { searchParams } = new URL(req.url);
-    const userId = normalizeUserId(
-      searchParams.get("userId") ?? req.headers.get("x-user-id"),
-    );
-
+    const userId = await getAuthUserId(req, fallbackUserId(req));
     const settings = await getRoleSettings(userId);
 
     return NextResponse.json({
@@ -37,7 +38,7 @@ export async function PUT(req: Request) {
       return NextResponse.json({ error: "roleId is required." }, { status: 400 });
     }
 
-    const userId = normalizeUserId(payload.userId ?? req.headers.get("x-user-id"));
+    const userId = await getAuthUserId(req, payload.userId ?? req.headers.get("x-user-id"));
     const result = await setCurrentRole(userId, payload.roleId.trim());
 
     return NextResponse.json({
@@ -71,7 +72,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "systemPrompt is required." }, { status: 400 });
     }
 
-    const userId = normalizeUserId(payload.userId ?? req.headers.get("x-user-id"));
+    const userId = await getAuthUserId(req, payload.userId ?? req.headers.get("x-user-id"));
     const { createRole } = await import("@/lib/server-settings");
     const role = await createRole(userId, {
       roleId: payload.roleId.trim(),

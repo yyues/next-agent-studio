@@ -5,6 +5,7 @@ import { useRouter } from "@/i18n/navigation";
 import { Assistant } from "../assistant";
 import { SettingsMenu } from "@/components/assistant-ui/settings-menu";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { LogoutButton } from "@/components/assistant-ui/logout-button";
 import {
   ConversationSidebar,
   useSidebarCollapsed,
@@ -84,7 +85,7 @@ export const ChatClient: FC<ChatClientProps> = ({
   };
 
   return (
-    <div className="bg-background text-foreground flex h-dvh">
+    <div className="bg-background text-foreground flex h-dvh overflow-hidden">
       <ConversationSidebar
         collapsed={collapsed}
         mobileOpen={mobileSidebarOpen}
@@ -93,8 +94,8 @@ export const ChatClient: FC<ChatClientProps> = ({
       />
 
       <div className="flex h-full min-w-0 flex-1 flex-col">
-        {/* 顶栏 */}
-        <header className="border-border/60 flex h-12 shrink-0 items-center gap-1.5 border-b px-3">
+        {/* 顶栏(毛玻璃) */}
+        <header className="bg-background/70 border-border/50 sticky top-0 z-20 flex h-12 shrink-0 items-center gap-1.5 border-b px-3 backdrop-blur-md">
           {/* 移动端:打开抽屉;桌面:折叠侧边栏 */}
           <button
             type="button"
@@ -119,6 +120,7 @@ export const ChatClient: FC<ChatClientProps> = ({
 
           <SettingsMenu onRoleSwitch={handleRoleSwitch} />
           <ThemeToggle />
+          <LogoutButton />
         </header>
 
         {/* 对话区 */}

@@ -16,6 +16,8 @@ import { RoleResourceModel } from "@/lib/models/role-resource";
 import { blobPut, blobListPathnames, blobDel } from "@/lib/blob";
 import { getProviderSettings, normalizeUserId } from "@/lib/server-settings";
 import { indexResourceFromBlob } from "@/lib/rag";
+import { getAuthUserId } from "@/lib/auth-request";
+import { assertRoleAccess } from "@/lib/server-settings";
 
 function sanitizeName(name: string): string {
   return name
@@ -52,10 +54,26 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ roleId: string }> },
 ) {
+  // ownership 守卫:内置角色共享,自定义角色必须属于调用者
+  try {
+    const { roleId } = await params;
+    const caller = await getAuthUserId(
+      req,
+      new URL(req.url).searchParams.get("userId"),
+    );
+    await assertRoleAccess(caller, roleId);
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : "Access denied." },
+      { status: 403 },
+    );
+  }
+
   try {
     const { roleId } = await params;
     const url = new URL(req.url);
-    const userId = normalizeUserId(
+    const userId = await getAuthUserId(
+      req,
       url.searchParams.get("userId") ?? req.headers.get("x-user-id"),
     );
 

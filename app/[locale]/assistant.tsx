@@ -30,7 +30,11 @@ export const Assistant: FC<AssistantProps> = ({
 }) => {
   const runtime = useChatRuntime({
     sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
-    ...(initialMessages && initialMessages.length > 0 ? { initialMessages } : {}),
+    // AI SDK v5+ ChatInit 的初始消息键是 messages(v4 才叫 initialMessages,
+    // 传错键名会被静默忽略,导致会话历史不渲染)
+    ...(initialMessages && initialMessages.length > 0
+      ? { messages: initialMessages }
+      : {}),
     onFinish: ({ messages }: { messages: UIMessage[] }) => {
       if (messages.length === 0) return;
       const context = getClientRuntimeContext();

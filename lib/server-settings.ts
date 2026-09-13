@@ -2,6 +2,7 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { generateText } from "ai";
 import { connectToMongo } from "@/lib/mongodb";
 import { ProviderConfigModel } from "@/lib/models/provider-config";
+import { ProviderEntryModel } from "@/lib/models/provider-entry";
 import { RoleProfileModel } from "@/lib/models/role-profile";
 import { UserSettingModel } from "@/lib/models/user-setting";
 import { RoleResourceModel } from "@/lib/models/role-resource";
@@ -77,6 +78,17 @@ const builtinRoleIds = new Set(defaultRoleProfiles.map((r) => r.roleId));
 
 export function isBuiltinRole(roleId: string) {
   return builtinRoleIds.has(roleId);
+}
+
+/**
+ * 角色 ownership 守卫:内置角色共享;自定义角色必须属于该 userId。
+ * 用于 skills/resources 等按 roleId 存储的端点,防止跨用户改动。
+ */
+export async function assertRoleAccess(userId: string, roleId: string) {
+  if (isBuiltinRole(roleId)) return;
+  await connectToMongo();
+  const doc = await RoleProfileModel.findOne({ userId, roleId }).lean();
+  if (!doc) throw new Error("Role not found for this user.");
 }
 
 export function normalizeUserId(input: unknown) {
@@ -175,39 +187,41 @@ function buildModel(config: ProviderSettings) {
 export async function getProviderSettings(userId: string) {
   try {
     await connectToMongo();
+    await ensureProvidersMigrated(userId);
+
+    // 聊天供应商:激活的 entry,无则回退默认
+    const entries = await ProviderEntryModel.find({ userId }).lean();
+    const active =
+      entries.find((e) => e.active) ?? entries[0] ?? null;
 
     const doc = await ProviderConfigModel.findOne({ userId }).lean();
-    if (!doc) {
-      return {
-        source: "default" as const,
-        config: defaultProviderSettings,
-        maskedApiKey: maskApiKey(defaultProviderSettings.apiKey),
-        maskedEmbeddingApiKey: maskApiKey(
-          defaultProviderSettings.embeddingApiKey,
-        ),
-      };
-    }
+    // embedding 为全局内置配置,不随供应商切换
+    const embeddingModel =
+      doc?.embeddingModel || defaultProviderSettings.embeddingModel;
+    const embeddingBaseUrl = doc?.embeddingBaseUrl ?? "";
+    const embeddingApiKey = doc?.embeddingApiKey ?? "";
 
-    const saved = {
-      providerName: doc.providerName,
-      baseUrl: doc.baseUrl,
-      apiKey: doc.apiKey,
-      model: doc.model,
-      embeddingModel:
-        doc.embeddingModel || defaultProviderSettings.embeddingModel,
-      embeddingBaseUrl: doc.embeddingBaseUrl ?? "",
-      embeddingApiKey: doc.embeddingApiKey ?? "",
-      temperature:
-        typeof doc.temperature === "number"
-          ? doc.temperature
-          : defaultProviderSettings.temperature,
-    } satisfies ProviderSettings;
+    const config: ProviderSettings = active
+      ? {
+          providerName: active.providerName || "openai-compatible",
+          baseUrl: active.baseUrl,
+          apiKey: active.apiKey,
+          model: active.model,
+          embeddingModel,
+          embeddingBaseUrl,
+          embeddingApiKey,
+          temperature:
+            typeof active.temperature === "number"
+              ? active.temperature
+              : defaultProviderSettings.temperature,
+        }
+      : defaultProviderSettings;
 
     return {
-      source: "user" as const,
-      config: saved,
-      maskedApiKey: maskApiKey(saved.apiKey),
-      maskedEmbeddingApiKey: maskApiKey(saved.embeddingApiKey),
+      source: (active ? "user" : "default") as "user" | "default",
+      config,
+      maskedApiKey: maskApiKey(config.apiKey),
+      maskedEmbeddingApiKey: maskApiKey(embeddingApiKey),
     };
   } catch (error) {
     console.warn(
@@ -223,6 +237,204 @@ export async function getProviderSettings(userId: string) {
       ),
     };
   }
+}
+
+/* ---------- 多供应商 CRUD ---------- */
+
+export type ProviderEntryInput = {
+  providerId?: string;
+  name: string;
+  providerName?: string;
+  baseUrl: string;
+  apiKey?: string; // 为空表示保留旧值(编辑时)
+  model: string;
+  temperature?: number;
+};
+
+/**
+ * 迁移:旧的单份 ProviderConfig 聊天配置 → 第一个供应商 entry。
+ * 已有 entry 或无旧配置时跳过。
+ */
+async function ensureProvidersMigrated(userId: string) {
+  const count = await ProviderEntryModel.countDocuments({ userId });
+  if (count > 0) return;
+
+  const legacy = await ProviderConfigModel.findOne({ userId }).lean();
+  if (!legacy?.baseUrl || !legacy?.apiKey || !legacy?.model) return;
+  // 默认值也迁移,保证"第一个供应商"始终存在且可用
+  await ProviderEntryModel.create({
+    userId,
+    providerId: "default",
+    name: legacy.providerName || "Default",
+    providerName: legacy.providerName || "openai-compatible",
+    baseUrl: legacy.baseUrl,
+    apiKey: legacy.apiKey,
+    model: legacy.model,
+    temperature:
+      typeof legacy.temperature === "number"
+        ? legacy.temperature
+        : defaultProviderSettings.temperature,
+    active: true,
+  });
+}
+
+export async function listProviderEntries(userId: string) {
+  await connectToMongo();
+  await ensureProvidersMigrated(userId);
+  const entries = await ProviderEntryModel.find({ userId })
+    .sort({ createdAt: 1 })
+    .lean();
+  return entries.map((e) => ({
+    providerId: e.providerId,
+    name: e.name,
+    providerName: e.providerName,
+    baseUrl: e.baseUrl,
+    model: e.model,
+    temperature: e.temperature ?? 0.7,
+    active: Boolean(e.active),
+    maskedApiKey: maskApiKey(e.apiKey),
+  }));
+}
+
+export async function getProviderEntryRaw(userId: string, providerId: string) {
+  await connectToMongo();
+  return ProviderEntryModel.findOne({ userId, providerId }).lean();
+}
+
+export async function upsertProviderEntry(
+  userId: string,
+  payload: ProviderEntryInput,
+) {
+  await connectToMongo();
+  if (!payload.name?.trim()) throw new Error("name is required.");
+  if (!/^https?:\/\//i.test(payload.baseUrl?.trim() ?? "")) {
+    throw new Error("baseUrl must be a valid http(s) URL.");
+  }
+  if (!payload.model?.trim()) throw new Error("model is required.");
+
+  const providerId =
+    payload.providerId?.trim() ||
+    payload.name
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/^-+|-+$/g, "") ||
+    `provider-${Date.now()}`;
+
+  const existing = await ProviderEntryModel.findOne({
+    userId,
+    providerId,
+  }).lean();
+  // apiKey 留空表示沿用旧值;新建时必须提供
+  const apiKey = payload.apiKey?.trim() || existing?.apiKey;
+  if (!apiKey) throw new Error("apiKey is required.");
+
+  const rawTemp = Number(payload.temperature);
+  const temperature =
+    Number.isFinite(rawTemp) && rawTemp >= 0 && rawTemp <= 2
+      ? rawTemp
+      : (existing?.temperature ?? defaultProviderSettings.temperature);
+
+  const count = await ProviderEntryModel.countDocuments({ userId });
+  const doc = await ProviderEntryModel.findOneAndUpdate(
+    { userId, providerId },
+    {
+      userId,
+      providerId,
+      name: payload.name.trim(),
+      providerName:
+        payload.providerName?.trim() || existing?.providerName || "openai-compatible",
+      baseUrl: payload.baseUrl.trim(),
+      apiKey,
+      model: payload.model.trim(),
+      temperature,
+      // 首个供应商自动激活
+      active: existing?.active ?? count === 0,
+    },
+    { new: true, upsert: true, setDefaultsOnInsert: true },
+  ).lean();
+
+  return doc;
+}
+
+export async function deleteProviderEntry(userId: string, providerId: string) {
+  await connectToMongo();
+  const doc = await ProviderEntryModel.findOneAndDelete({
+    userId,
+    providerId,
+  }).lean();
+  if (!doc) throw new Error("Provider not found.");
+
+  // 删除的是激活项 → 自动激活剩余的第一个
+  if (doc.active) {
+    const remaining = await ProviderEntryModel.findOne({ userId }).lean();
+    if (remaining) {
+      await ProviderEntryModel.updateOne(
+        { userId, providerId: remaining.providerId },
+        { active: true },
+      );
+    }
+  }
+  return { deleted: true };
+}
+
+export async function setActiveProviderEntry(
+  userId: string,
+  providerId: string,
+) {
+  await connectToMongo();
+  const exists = await ProviderEntryModel.findOne({
+    userId,
+    providerId,
+  }).lean();
+  if (!exists) throw new Error("Provider not found.");
+
+  await ProviderEntryModel.updateMany({ userId }, { active: false });
+  await ProviderEntryModel.updateOne({ userId, providerId }, { active: true });
+  return { active: providerId };
+}
+
+/* ---------- 全局内置 Embedding ---------- */
+
+export async function getEmbeddingSettings(userId: string) {
+  await connectToMongo();
+  const doc = await ProviderConfigModel.findOne({ userId }).lean();
+  return {
+    // 模型内置固定,不开放修改
+    model: defaultProviderSettings.embeddingModel,
+    baseUrl: doc?.embeddingBaseUrl ?? "",
+    apiKey: doc?.embeddingApiKey ?? "",
+    maskedApiKey: maskApiKey(doc?.embeddingApiKey ?? ""),
+  };
+}
+
+export async function upsertEmbeddingSettings(
+  userId: string,
+  payload: { embeddingBaseUrl?: string; embeddingApiKey?: string },
+) {
+  await connectToMongo();
+  const existing = await ProviderConfigModel.findOne({ userId }).lean();
+  const embeddingBaseUrl = payload.embeddingBaseUrl?.trim() ?? "";
+  // key 留空表示沿用旧值(显式传空串也保留,避免误清空)
+  const embeddingApiKey =
+    payload.embeddingApiKey?.trim() || existing?.embeddingApiKey || "";
+
+  await ProviderConfigModel.findOneAndUpdate(
+    { userId },
+    {
+      userId,
+      embeddingModel: defaultProviderSettings.embeddingModel,
+      embeddingBaseUrl,
+      embeddingApiKey,
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  ).lean();
+
+  return {
+    model: defaultProviderSettings.embeddingModel,
+    baseUrl: embeddingBaseUrl,
+    maskedApiKey: maskApiKey(embeddingApiKey),
+  };
 }
 
 export async function upsertProviderSettings(

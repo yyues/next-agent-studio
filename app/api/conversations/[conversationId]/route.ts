@@ -7,12 +7,24 @@
 import { NextResponse } from "next/server";
 import { connectToMongo } from "@/lib/mongodb";
 import { ConversationModel } from "@/lib/models/conversation";
-import { normalizeUserId } from "@/lib/server-settings";
+import { getAuthUserId } from "@/lib/auth-request";
 
-function getUserId(req: Request) {
+async function getUserId(req: Request) {
   const url = new URL(req.url);
-  return normalizeUserId(
-    url.searchParams.get("userId") ?? req.headers.get("x-user-id"),
+  return getAuthUserId(
+      req,
+      url.searchParams.get("userId") ?? req.headers.get("x-user-id"),
+    );
+}
+
+/** PUT/PATCH 的 userId 允许放在 body(前端保存时随 JSON 提交) */
+async function getUserIdWithBody(req: Request, bodyUserId?: unknown) {
+  const url = new URL(req.url);
+  return getAuthUserId(
+    req,
+    url.searchParams.get("userId") ??
+      req.headers.get("x-user-id") ??
+      (typeof bodyUserId === "string" ? bodyUserId : undefined),
   );
 }
 
@@ -35,7 +47,7 @@ type Params = { params: Promise<{ conversationId: string }> };
 export async function GET(req: Request, { params }: Params) {
   try {
     const { conversationId } = await params;
-    const userId = getUserId(req);
+    const userId = await getUserId(req);
     await connectToMongo();
     const doc = await ConversationModel.findOne({
       userId,
@@ -57,14 +69,15 @@ export async function GET(req: Request, { params }: Params) {
 export async function PUT(req: Request, { params }: Params) {
   try {
     const { conversationId } = await params;
-    const userId = getUserId(req);
     const body = (await req.json()) as {
       roleId?: string;
+      userId?: string;
       messages?: { role: string; parts?: { type: string; text?: string }[] }[];
     };
     if (!Array.isArray(body.messages)) {
       return NextResponse.json({ error: "messages array required." }, { status: 400 });
     }
+    const userId = await getUserIdWithBody(req, body.userId);
 
     await connectToMongo();
     const existing = await ConversationModel.findOne({
@@ -98,8 +111,8 @@ export async function PUT(req: Request, { params }: Params) {
 export async function PATCH(req: Request, { params }: Params) {
   try {
     const { conversationId } = await params;
-    const userId = getUserId(req);
-    const body = (await req.json()) as { title?: string };
+    const body = (await req.json()) as { title?: string; userId?: string };
+    const userId = await getUserIdWithBody(req, body.userId);
     const title = body.title?.trim();
     if (!title) {
       return NextResponse.json({ error: "title required." }, { status: 400 });
@@ -124,7 +137,7 @@ export async function PATCH(req: Request, { params }: Params) {
 export async function DELETE(req: Request, { params }: Params) {
   try {
     const { conversationId } = await params;
-    const userId = getUserId(req);
+    const userId = await getUserId(req);
     await connectToMongo();
     const result = await ConversationModel.deleteOne({
       userId,

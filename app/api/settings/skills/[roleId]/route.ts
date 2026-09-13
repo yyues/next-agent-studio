@@ -15,6 +15,8 @@
  * 列表：合并 文件系统内置 skill（仓库提交，按 SKILL.md 扫描）+ 数据库上传 skill
  */
 import { NextResponse } from "next/server";
+import { getAuthUserId } from "@/lib/auth-request";
+import { assertRoleAccess } from "@/lib/server-settings";
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import { join, resolve } from "path";
 import { createHash } from "crypto";
@@ -92,6 +94,21 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ roleId: string }> },
 ) {
+  // ownership 守卫:内置角色共享,自定义角色必须属于调用者
+  try {
+    const { roleId } = await params;
+    const caller = await getAuthUserId(
+      req,
+      new URL(req.url).searchParams.get("userId"),
+    );
+    await assertRoleAccess(caller, roleId);
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : "Access denied." },
+      { status: 403 },
+    );
+  }
+
   try {
     const { roleId } = await params;
 

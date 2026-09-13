@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import {
-  normalizeUserId,
   testProviderSettings,
   getProviderSettings,
 } from "@/lib/server-settings";
+import { getAuthUserId } from "@/lib/auth-request";
 
 export async function POST(req: Request) {
   try {
@@ -15,7 +15,7 @@ export async function POST(req: Request) {
       model?: string;
     };
 
-    const userId = normalizeUserId(payload.userId ?? req.headers.get("x-user-id"));
+    const userId = await getAuthUserId(req, payload.userId ?? req.headers.get("x-user-id"));
     const current = await getProviderSettings(userId);
 
     await testProviderSettings({

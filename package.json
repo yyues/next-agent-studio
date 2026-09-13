@@ -9,7 +9,8 @@
     "format": "oxfmt --check --ignore-path=.gitignore",
     "format:fix": "oxfmt --ignore-path=.gitignore",
     "lint": "oxlint --ignore-pattern='.agents/**' && oxfmt --check --ignore-path=.gitignore",
-    "lint:fix": "oxlint --fix --ignore-pattern='.agents/**' && oxfmt --ignore-path=.gitignore"
+    "lint:fix": "oxlint --fix --ignore-pattern='.agents/**' && oxfmt --ignore-path=.gitignore",
+    "test:provider": "node scripts/test-provider-persistence.mjs"
   },
   "dependencies": {
     "@ai-sdk/mcp": "^2.0.49",

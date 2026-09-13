@@ -4,6 +4,7 @@
 import { NextResponse } from "next/server";
 import { normalizeUserId } from "@/lib/server-settings";
 import { deleteMcpServer } from "@/lib/mcp/client";
+import { getAuthUserId } from "@/lib/auth-request";
 
 export async function DELETE(
   req: Request,
@@ -12,7 +13,8 @@ export async function DELETE(
   try {
     const { roleId, serverId } = await params;
     const url = new URL(req.url);
-    const userId = normalizeUserId(
+    const userId = await getAuthUserId(
+      req,
       url.searchParams.get("userId") ?? req.headers.get("x-user-id"),
     );
     await deleteMcpServer(userId, roleId, serverId);

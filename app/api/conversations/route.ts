@@ -5,11 +5,13 @@ import { NextResponse } from "next/server";
 import { connectToMongo } from "@/lib/mongodb";
 import { ConversationModel } from "@/lib/models/conversation";
 import { normalizeUserId } from "@/lib/server-settings";
+import { getAuthUserId } from "@/lib/auth-request";
 
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
-    const userId = normalizeUserId(
+    const userId = await getAuthUserId(
+      req,
       url.searchParams.get("userId") ?? req.headers.get("x-user-id"),
     );
     await connectToMongo();
