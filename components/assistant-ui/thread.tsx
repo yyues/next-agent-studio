@@ -7,6 +7,7 @@ import { MarkdownText } from "@/components/assistant-ui/markdown-text";
 import { ToolFallback } from "@/components/assistant-ui/tool-fallback";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { DeepThinkingToggle } from "@/components/assistant-ui/deep-thinking-toggle";
+import { McpPicker } from "@/components/assistant-ui/mcp-picker";
 import { ThinkingIndicator } from "@/components/thinking-indicator";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -229,6 +230,7 @@ const ComposerAction: FC = () => {
       <div className="flex items-center gap-1.5">
         <ComposerAddAttachment />
         <DeepThinkingToggle />
+        <McpPicker />
       </div>
       <div className="flex items-center gap-1.5">
         <AuiIf condition={(s) => s.thread.capabilities.dictation}>

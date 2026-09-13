@@ -19,7 +19,7 @@ export type ProviderConfig = {
   temperature?: number;
 };
 
-const STORAGE_KEY = "jx-ai-provider-config";
+const STORAGE_KEY = "Agent-studio-provider-config";
 
 // 从浏览器环境派生一个稳定的加密密钥
 async function deriveKey(): Promise<CryptoKey> {
@@ -27,7 +27,7 @@ async function deriveKey(): Promise<CryptoKey> {
   // 使用 navigator.userAgent + 固定盐值作为密钥材料
   const material = encoder.encode(
     (typeof navigator !== "undefined" ? navigator.userAgent : "server") +
-      "::jx-ai-provider-salt",
+      "::Agent-studio-provider-salt",
   );
   const hash = await crypto.subtle.digest("SHA-256", material);
   return crypto.subtle.importKey("raw", hash, "AES-GCM", false, [

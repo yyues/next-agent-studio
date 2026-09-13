@@ -2,6 +2,8 @@ export type ClientRuntimeContext = {
   userId: string;
   roleId: string;
   deepThinking?: boolean;
+  /** 对话中勾选启用的 MCP serverId 列表;undefined 表示使用角色默认(全部 enabled) */
+  mcpServerIds?: string[];
 };
 
 export const RUNTIME_CONTEXT_UPDATED_EVENT = "runtime-context-updated";
@@ -22,6 +24,9 @@ function normalizeContext(input: Partial<ClientRuntimeContext>) {
     userId,
     roleId,
     deepThinking: input.deepThinking === true,
+    mcpServerIds: Array.isArray(input.mcpServerIds)
+      ? input.mcpServerIds
+      : undefined,
   };
 }
 
@@ -55,7 +60,9 @@ export function setClientRuntimeContext(input: Partial<ClientRuntimeContext>) {
   if (
     next.userId === current.userId &&
     next.roleId === current.roleId &&
-    next.deepThinking === current.deepThinking
+    next.deepThinking === current.deepThinking &&
+    JSON.stringify(next.mcpServerIds) ===
+      JSON.stringify(current.mcpServerIds)
   ) {
     return next;
   }

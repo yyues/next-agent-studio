@@ -12,6 +12,11 @@ import {
 } from "@/lib/server-settings";
 import { resolveReasoningOptions } from "@/lib/reasoning";
 import { getRagContext } from "@/lib/rag";
+import {
+  loadMcpToolsForChat,
+  extractMcpMentions,
+  type McpToolBundle,
+} from "@/lib/mcp/client";
 
 /**
  * 从消息列表中提取最后一条用户消息的文本，作为 RAG 检索 query。
@@ -40,6 +45,7 @@ export async function POST(req: Request) {
     userId,
     roleId,
     deepThinking,
+    mcpServerIds,
   }: {
     messages: UIMessage[];
     system?: string;
@@ -49,6 +55,8 @@ export async function POST(req: Request) {
     deepThinking?: boolean;
     // conversationId 由客户端携带（见 assistant.tsx），服务端预留用于会话维度
     conversationId?: string;
+    /** 对话面板勾选启用的 MCP serverId 列表 */
+    mcpServerIds?: string[];
   } = await req.json();
 
   const normalizedUserId = normalizeUserId(
@@ -78,15 +86,50 @@ export async function POST(req: Request) {
 
   // RAG：用末条用户消息检索该角色知识库切片，注入 system prompt。
   // 角色无资源或检索失败均返回空串，不影响对话。
+  // MCP:加载角色配置的外部 MCP server 工具。消息中 @serverName 可强制启用。
+  // 未勾选任何 server 且无 @提及时,使用角色下所有 enabled 的 server。
+  // 单个 server 连接失败自动跳过,不阻断对话。
+  const lastUserQuery = extractLastUserQuery(messages);
+  let mcpBundle: McpToolBundle = {
+    tools: {},
+    serverSummaries: [],
+    close: async () => undefined,
+  };
+  try {
+    mcpBundle = await loadMcpToolsForChat({
+      userId: normalizedUserId,
+      roleId: runtimeConfig.role.roleId,
+      enabledServerIds: Array.isArray(mcpServerIds)
+        ? mcpServerIds
+        : undefined,
+      mentionNames: extractMcpMentions(lastUserQuery),
+    });
+  } catch (error) {
+    console.warn("[chat] MCP tools load failed:", error);
+  }
+
+  const mcpPromptSection =
+    mcpBundle.serverSummaries.length > 0
+      ? [
+          "你可以调用以下外部 MCP 工具(工具名以 mcp__ 开头):",
+          ...mcpBundle.serverSummaries.map(
+            (s) =>
+              `- ${s.name} (serverId: ${s.serverId}): ${s.toolNames.join(", ") || "无工具"}`,
+          ),
+          "用户在消息中用 @server名称 指定某个 MCP 时,优先使用该 server 的工具。",
+        ].join("\n")
+      : "";
+
   const ragContext = await getRagContext(
     runtimeConfig.role.roleId,
-    extractLastUserQuery(messages),
+    lastUserQuery,
     runtimeConfig.provider,
   );
 
   const mergedSystemPrompt = [
     runtimeConfig.systemPrompt,
     ragContext,
+    mcpPromptSection,
     system,
     deepThinkingInstruction,
   ]
@@ -100,11 +143,17 @@ export async function POST(req: Request) {
     temperature: runtimeConfig.temperature,
     tools: {
       ...frontendTools(activeTools),
+      ...mcpBundle.tools,
     },
     ...(reasoningOptions.providerOptions
       ? { providerOptions: reasoningOptions.providerOptions }
       : {}),
   });
+
+  // 流式生成结束后关闭 MCP 连接(finishReason 在整轮生成含工具调用完成后 resolve)
+  void Promise.resolve(result.finishReason)
+    .then(() => mcpBundle.close())
+    .catch(() => undefined);
 
   return result.toUIMessageStreamResponse({
     onError: (error) =>

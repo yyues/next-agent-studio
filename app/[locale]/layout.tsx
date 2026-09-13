@@ -21,8 +21,8 @@ const ibmPlexMono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "JX-AI",
-  description: "AI assistant powered by assistant-ui",
+  title: process.env.APP_TITLE?.trim() || "Agent Studio",
+  description: `${process.env.APP_TITLE?.trim() || "Agent Studio"} — 可定制角色的 AI 助手,支持技能、知识库(RAG)与外部 MCP 工具`,
 };
 
 export function generateStaticParams() {

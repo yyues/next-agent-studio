@@ -23,6 +23,8 @@ import {
   CheckIcon,
   Loader2Icon,
   AlertCircleIcon,
+  PlusIcon,
+  PencilIcon,
 } from "lucide-react";
 
 /* ---------- types ---------- */
@@ -39,6 +41,14 @@ type ResourceInfo = {
   fileName: string;
   filePath: string;
   createdAt?: string;
+};
+
+type McpServerInfo = {
+  serverId: string;
+  name: string;
+  url: string;
+  enabled: boolean;
+  headerKeys: string[];
 };
 
 type RoleDetail = {
@@ -92,6 +102,14 @@ export default function RoleDetailPage() {
   );
   const [deleteResourceTarget, setDeleteResourceTarget] =
     useState<ResourceInfo | null>(null);
+
+  /* mcp state */
+  const [mcpServers, setMcpServers] = useState<McpServerInfo[]>([]);
+  const [mcpDialogOpen, setMcpDialogOpen] = useState(false);
+  const [mcpEditing, setMcpEditing] = useState<McpServerInfo | null>(null);
+  const [mcpForm, setMcpForm] = useState({ name: "", url: "", headers: "" });
+  const [mcpTesting, setMcpTesting] = useState(false);
+  const [mcpTestResult, setMcpTestResult] = useState("");
 
   const isBuiltin = builtinRoleIds.has(roleId);
 
@@ -248,6 +266,142 @@ export default function RoleDetailPage() {
       }
       setDeleteResourceTarget(null);
       await loadDetail();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("deleteFailed"));
+    }
+  };
+
+  /* ----- mcp handlers ----- */
+
+  const loadMcpServers = useCallback(async () => {
+    try {
+      const userId = getClientRuntimeContext().userId;
+      const res = await fetch(
+        `/api/settings/roles/${encodeURIComponent(roleId)}/mcp?userId=${encodeURIComponent(userId)}`,
+      );
+      if (!res.ok) return;
+      const data = (await res.json()) as { servers: McpServerInfo[] };
+      setMcpServers(data.servers ?? []);
+    } catch {
+      // 列表加载失败保持空,不打断页面
+    }
+  }, [roleId]);
+
+  useEffect(() => {
+    void loadMcpServers();
+  }, [loadMcpServers]);
+
+  const openMcpDialog = (target: McpServerInfo | null) => {
+    setMcpEditing(target);
+    setMcpForm({
+      name: target?.name ?? "",
+      url: target?.url ?? "",
+      headers: "",
+    });
+    setMcpTestResult("");
+    setMcpDialogOpen(true);
+  };
+
+  /** headers 文本域按 "Key: Value" 每行一条解析 */
+  const parseHeaders = (raw: string): Record<string, string> => {
+    const headers: Record<string, string> = {};
+    for (const line of raw.split("\n")) {
+      const idx = line.indexOf(":");
+      if (idx <= 0) continue;
+      const key = line.slice(0, idx).trim();
+      const value = line.slice(idx + 1).trim();
+      if (key && value) headers[key] = value;
+    }
+    return headers;
+  };
+
+  const handleMcpSave = async () => {
+    try {
+      const userId = getClientRuntimeContext().userId;
+      const res = await fetch(
+        `/api/settings/roles/${encodeURIComponent(roleId)}/mcp`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userId,
+            serverId: mcpEditing?.serverId,
+            name: mcpForm.name,
+            url: mcpForm.url,
+            headers: parseHeaders(mcpForm.headers),
+          }),
+        },
+      );
+      if (!res.ok) {
+        const err = (await res.json()) as { error?: string };
+        throw new Error(err.error || t("saveFailed"));
+      }
+      setMcpDialogOpen(false);
+      await loadMcpServers();
+    } catch (e) {
+      setMcpTestResult(e instanceof Error ? e.message : t("saveFailed"));
+    }
+  };
+
+  const handleMcpTest = async () => {
+    setMcpTesting(true);
+    setMcpTestResult("");
+    try {
+      const res = await fetch(
+        `/api/settings/roles/${encodeURIComponent(roleId)}/mcp`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            url: mcpForm.url,
+            headers: parseHeaders(mcpForm.headers),
+          }),
+        },
+      );
+      const data = (await res.json()) as {
+        toolNames?: string[];
+        error?: string;
+      };
+      if (!res.ok) throw new Error(data.error || "connection failed");
+      setMcpTestResult(
+        `OK - ${data.toolNames?.length ?? 0} tools: ${(data.toolNames ?? []).join(", ")}`,
+      );
+    } catch (e) {
+      setMcpTestResult(e instanceof Error ? e.message : "connection failed");
+    } finally {
+      setMcpTesting(false);
+    }
+  };
+
+  const handleMcpToggleEnabled = async (server: McpServerInfo) => {
+    const userId = getClientRuntimeContext().userId;
+    // enabled 切换通过 upsert 重新提交完整字段
+    await fetch(`/api/settings/roles/${encodeURIComponent(roleId)}/mcp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userId,
+        serverId: server.serverId,
+        name: server.name,
+        url: server.url,
+        enabled: !server.enabled,
+      }),
+    });
+    await loadMcpServers();
+  };
+
+  const handleMcpDelete = async (server: McpServerInfo) => {
+    try {
+      const userId = getClientRuntimeContext().userId;
+      const res = await fetch(
+        `/api/settings/roles/${encodeURIComponent(roleId)}/mcp/${encodeURIComponent(server.serverId)}?userId=${encodeURIComponent(userId)}`,
+        { method: "DELETE" },
+      );
+      if (!res.ok) {
+        const err = (await res.json()) as { error?: string };
+        throw new Error(err.error || t("deleteFailed"));
+      }
+      await loadMcpServers();
     } catch (e) {
       setError(e instanceof Error ? e.message : t("deleteFailed"));
     }
@@ -529,7 +683,151 @@ export default function RoleDetailPage() {
             </div>
           )}
         </section>
+
+        {/* mcp servers card */}
+        <section className="border-border/60 bg-card mt-6 rounded-lg border p-5">
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="text-sm font-medium">MCP Servers</h2>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => openMcpDialog(null)}
+            >
+              <PlusIcon className="size-3.5" />
+              添加 MCP
+            </Button>
+          </div>
+          {mcpServers.length === 0 ? (
+            <p className="text-muted-foreground text-sm">
+              未配置外部 MCP server。添加后,对话中可勾选启用,也可在消息中用 @名称 指定。
+            </p>
+          ) : (
+            <div className="grid gap-2">
+              {mcpServers.map((s) => (
+                <div
+                  key={s.serverId}
+                  className="border-border/40 flex items-start justify-between gap-3 rounded-md border px-3 py-2.5"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium">{s.name}</span>
+                      <span className="text-muted-foreground bg-muted rounded px-1 py-0.5 text-[10px]">
+                        {s.serverId}
+                      </span>
+                      <label className="ml-1 flex cursor-pointer items-center gap-1 text-xs">
+                        <input
+                          type="checkbox"
+                          checked={s.enabled}
+                          onChange={() => void handleMcpToggleEnabled(s)}
+                          className="size-3"
+                        />
+                        启用
+                      </label>
+                    </div>
+                    <p className="text-muted-foreground mt-0.5 truncate text-xs">
+                      {s.url}
+                      {s.headerKeys.length > 0 &&
+                        ` · headers: ${s.headerKeys.join(", ")}`}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => openMcpDialog(s)}
+                      className="text-muted-foreground hover:text-foreground hover:bg-muted inline-flex size-6 items-center justify-center rounded transition-colors"
+                    >
+                      <PencilIcon className="size-3" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleMcpDelete(s)}
+                      className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 inline-flex size-6 items-center justify-center rounded transition-colors"
+                    >
+                      <Trash2Icon className="size-3" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
       </div>
+
+      {/* mcp add/edit dialog */}
+      <Dialog open={mcpDialogOpen} onOpenChange={setMcpDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{mcpEditing ? "编辑 MCP" : "添加 MCP"}</DialogTitle>
+            <DialogDescription>
+              远程 MCP server(Streamable HTTP / SSE URL)
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3">
+            <label className="grid gap-1.5">
+              <span className="text-xs text-muted-foreground">名称</span>
+              <input
+                value={mcpForm.name}
+                onChange={(e) =>
+                  setMcpForm((f) => ({ ...f, name: e.target.value }))
+                }
+                placeholder="如 weather(对话中可用 @weather 指定)"
+                className="bg-background border-input h-9 rounded-md border px-2.5 text-sm outline-none"
+              />
+            </label>
+            <label className="grid gap-1.5">
+              <span className="text-xs text-muted-foreground">URL</span>
+              <input
+                value={mcpForm.url}
+                onChange={(e) =>
+                  setMcpForm((f) => ({ ...f, url: e.target.value }))
+                }
+                placeholder="https://example.com/mcp"
+                className="bg-background border-input h-9 rounded-md border px-2.5 text-sm outline-none"
+              />
+            </label>
+            <label className="grid gap-1.5">
+              <span className="text-xs text-muted-foreground">
+                请求头(可选,每行一条,格式 Key: Value)
+              </span>
+              <textarea
+                value={mcpForm.headers}
+                onChange={(e) =>
+                  setMcpForm((f) => ({ ...f, headers: e.target.value }))
+                }
+                placeholder={"Authorization: Bearer xxx"}
+                className="bg-background border-input min-h-16 rounded-md border px-2.5 py-2 font-mono text-xs outline-none"
+                rows={3}
+              />
+            </label>
+            {mcpTestResult && (
+              <p
+                className={`text-xs ${mcpTestResult.startsWith("OK") ? "text-emerald-500" : "text-destructive"}`}
+              >
+                {mcpTestResult}
+              </p>
+            )}
+          </div>
+          <DialogFooter className="sm:justify-between">
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => void handleMcpTest()}
+              disabled={mcpTesting || !mcpForm.url}
+            >
+              {mcpTesting && <Loader2Icon className="size-3.5 animate-spin" />}
+              测试连接
+            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setMcpDialogOpen(false)}>
+                {tc("cancel")}
+              </Button>
+              <Button onClick={() => void handleMcpSave()}>保存</Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* delete role dialog */}
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
