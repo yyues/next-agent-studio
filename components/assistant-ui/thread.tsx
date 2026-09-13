@@ -356,6 +356,7 @@ const AssistantThinking: FC = () => {
 };
 
 const ReasoningBlock: FC<{ text: string }> = ({ text }) => {
+  const t = useTranslations("thread");
   if (!text) return null;
   return (
     <details
@@ -364,7 +365,7 @@ const ReasoningBlock: FC<{ text: string }> = ({ text }) => {
     >
       <summary className="flex cursor-pointer select-none items-center gap-1.5 text-xs font-medium outline-none">
         <ChevronRightIcon className="size-3.5 transition-transform group-open:rotate-90" />
-        思考过程
+        {t("thinkingProcess")}
       </summary>
       <div className="mt-2 whitespace-pre-wrap text-[13px] leading-relaxed">
         {text}

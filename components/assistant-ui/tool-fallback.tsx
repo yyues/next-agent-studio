@@ -1,6 +1,7 @@
 "use client";
 
 import { memo, useCallback, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import {
   AlertCircleIcon,
   CheckIcon,
@@ -137,9 +138,10 @@ function ToolFallbackTrigger({
   const isRunning = statusType === "running";
   const isCancelled =
     status?.type === "incomplete" && status.reason === "cancelled";
+  const t = useTranslations("thread");
 
   const Icon = statusIconMap[statusType];
-  const label = isCancelled ? "Cancelled tool" : "Used tool";
+  const label = isCancelled ? t("cancelledTool") : t("usedTool");
 
   return (
     <CollapsibleTrigger
@@ -283,7 +285,8 @@ function ToolFallbackError({
   if (!errorText) return null;
 
   const isCancelled = status.reason === "cancelled";
-  const headerText = isCancelled ? "Cancelled reason:" : "Error:";
+  const t = useTranslations("thread");
+  const headerText = isCancelled ? t("cancelledReason") : t("toolError");
 
   return (
     <div
@@ -304,11 +307,12 @@ function ToolFallbackError({
 const APPROVED_RESULT = "Approved by user";
 const DENIED_RESULT = "User denied tool execution";
 
+// 默认标签的 i18n key(见 messages/*.json thread 段)
 const APPROVAL_OPTION_DEFAULT_LABELS: Record<string, string> = {
-  "allow-once": "Allow",
-  "allow-always": "Always allow",
-  "reject-once": "Deny",
-  "reject-always": "Always deny",
+  "allow-once": "allowTool",
+  "allow-always": "alwaysAllow",
+  "reject-once": "denyTool",
+  "reject-always": "alwaysDeny",
 };
 
 const isKnownKind = (kind: string) =>
@@ -317,10 +321,13 @@ const isKnownKind = (kind: string) =>
 const isAllowKind = (kind: string) =>
   kind === "allow-once" || kind === "allow-always";
 
-const approvalOptionLabel = (option: ToolApprovalOption) =>
+const approvalOptionLabel = (
+  option: ToolApprovalOption,
+  t: (key: string) => string,
+) =>
   option.label ??
   (isKnownKind(option.kind)
-    ? APPROVAL_OPTION_DEFAULT_LABELS[option.kind]
+    ? t(APPROVAL_OPTION_DEFAULT_LABELS[option.kind])
     : undefined) ??
   option.id;
 
@@ -355,6 +362,7 @@ function ToolFallbackApproval({
   }) {
   const [submitted, setSubmitted] = useState(false);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const t = useTranslations("thread");
 
   if (
     approval != null &&
@@ -431,7 +439,7 @@ function ToolFallbackApproval({
         {...props}
       >
         <p className="aui-tool-fallback-approval-confirm-title font-semibold">
-          {confirmMeta?.title ?? `${approvalOptionLabel(confirming)}?`}
+          {confirmMeta?.title ?? `${approvalOptionLabel(confirming, t)}?`}
         </p>
         {confirmDescription && (
           <p className="aui-tool-fallback-approval-confirm-description text-muted-foreground">
@@ -456,7 +464,7 @@ function ToolFallbackApproval({
             onClick={() => respondWithOption(confirming)}
             disabled={submitted}
           >
-            Confirm
+            {t("confirmTool")}
           </Button>
           <Button
             size="sm"
@@ -465,7 +473,7 @@ function ToolFallbackApproval({
             onClick={() => setConfirmingId(null)}
             disabled={submitted}
           >
-            Back
+            {t("cancel")}
           </Button>
         </div>
       </div>
@@ -496,7 +504,7 @@ function ToolFallbackApproval({
             onClick={() => handleOption(option)}
             disabled={submitted}
           >
-            {approvalOptionLabel(option)}
+            {approvalOptionLabel(option, t)}
           </Button>
         ))}
         {rejectOptions.length === 0 && (
@@ -507,7 +515,7 @@ function ToolFallbackApproval({
             onClick={() => respond(false)}
             disabled={submitted}
           >
-            Deny
+            {t("denyTool")}
           </Button>
         )}
       </div>
@@ -529,7 +537,7 @@ function ToolFallbackApproval({
         onClick={() => respond(true)}
         disabled={submitted}
       >
-        Allow
+        {t("allowTool")}
       </Button>
       <Button
         size="sm"
@@ -538,7 +546,7 @@ function ToolFallbackApproval({
         onClick={() => respond(false)}
         disabled={submitted}
       >
-        Deny
+        {t("denyTool")}
       </Button>
     </div>
   );

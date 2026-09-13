@@ -11,13 +11,17 @@
     "loading": "加载中...",
     "confirm": "确认",
     "back": "返回",
-    "manage": "管理"
+    "manage": "管理",
+    "toggleSidebar": "切换侧边栏"
   },
   "thread": {
     "welcome": "有什么可以帮你的？",
     "noThreads": "暂无会话",
     "newChat": "新对话",
     "deleteThread": "删除",
+    "untitledThread": "新会话",
+    "renameThread": "重命名",
+    "deleteThreadConfirm": "确定要删除会话「{name}」吗?删除后不可恢复。",
     "roles": "角色",
     "placeholder": "输入消息...",
     "scrollToBottom": "滚动到底部",
@@ -34,7 +38,21 @@
     "more": "更多",
     "loadingConversation": "加载对话中",
     "previous": "上一条",
-    "next": "下一条"
+    "next": "下一条",
+    "thinkingProcess": "思考过程",
+    "usedTool": "使用工具",
+    "cancelledTool": "已取消的工具",
+    "toolError": "错误:",
+    "cancelledReason": "取消原因:",
+    "allowTool": "允许",
+    "alwaysAllow": "总是允许",
+    "denyTool": "拒绝",
+    "alwaysDeny": "总是拒绝",
+    "confirmTool": "确认",
+    "uploadFailed": "上传失败",
+    "removeFile": "移除文件",
+    "addAttachment": "添加附件",
+    "imagePreview": "图片预览"
   },
   "settings": {
     "title": "Provider 设置",

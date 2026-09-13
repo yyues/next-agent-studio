@@ -20,5 +20,10 @@ export default async function ChatConversationPage({
   const sp = await searchParams;
   const roleId = typeof sp?.roleId === "string" ? sp.roleId : undefined;
 
-  return <ChatClient chatId={chatId} initialRoleId={roleId} />;
+  // 网页标题同源(APP_TITLE env),服务端读取传给客户端侧边栏展示
+  const appTitle = process.env.APP_TITLE?.trim() || "Agent Studio";
+
+  return (
+    <ChatClient chatId={chatId} initialRoleId={roleId} appTitle={appTitle} />
+  );
 }
