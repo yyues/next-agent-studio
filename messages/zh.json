@@ -63,7 +63,11 @@
     "slashEmpty": "没有匹配的命令",
     "slashLoading": "正在加载命令…",
     "slashChipHint": "命令",
-    "modelAttachment": "附件"
+    "modelAttachment": "附件",
+    "genDocGenerating": "正在生成文档",
+    "genDocPreview": "预览",
+    "genDocDownload": "下载",
+    "genDocTitle": "AI 生成的文档"
   },
   "settings": {
     "title": "模型供应商",

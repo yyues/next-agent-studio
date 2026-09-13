@@ -63,7 +63,11 @@
     "slashEmpty": "No matching commands",
     "slashLoading": "Loading commands…",
     "slashChipHint": "command",
-    "modelAttachment": "Attachment"
+    "modelAttachment": "Attachment",
+    "genDocGenerating": "Generating document",
+    "genDocPreview": "Preview",
+    "genDocDownload": "Download",
+    "genDocTitle": "AI-generated document"
   },
   "settings": {
     "title": "Model Providers",

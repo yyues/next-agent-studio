@@ -10,6 +10,7 @@ import { ConversationTimeline } from "@/components/assistant-ui/conversation-tim
 import { ComposerSlash, LexicalSlashChip } from "@/components/assistant-ui/composer-slash";
 import { UserMessageText } from "@/components/assistant-ui/user-message-text";
 import { AssistantAttachment } from "@/components/assistant-ui/attachment";
+import { GenerateDocumentResult } from "@/components/assistant-ui/generate-document-tool";
 import { slashDirectiveFormatter } from "@/lib/slash-directive";
 import { LexicalComposerInput } from "@assistant-ui/react-lexical";
 import { ChipSpacingPlugin } from "@/components/assistant-ui/chip-spacing-plugin";
@@ -426,8 +427,21 @@ const AssistantMessage: FC = () => {
             if (part.type === "reasoning")
               return <ReasoningBlock text={part.text} />;
             if (part.type === "text") return <MarkdownText />;
-            if (part.type === "tool-call")
+            if (part.type === "tool-call") {
+              // 文件生成工具族:专用渲染器(生成中/完成的文档 tile + 预览/下载)
+              if (
+                part.toolName === "generate_document" ||
+                part.toolName === "generate_spreadsheet" ||
+                part.toolName === "generate_presentation"
+              )
+                return (
+                  <GenerateDocumentResult
+                    args={part.args}
+                    result={part.result ?? null}
+                  />
+                );
               return part.toolUI ?? <ToolFallback {...part} />;
+            }
             // 模型返回的附件:图片内联展示,其他文件渲染为可下载 tile
             if (part.type === "file")
               return (
