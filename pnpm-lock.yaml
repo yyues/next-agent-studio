@@ -17,6 +17,9 @@ importers:
       '@ai-sdk/openai-compatible':
         specifier: ^3.0.41
         version: 3.0.41(zod@4.4.3)
+      '@ai-sdk/provider-utils':
+        specifier: ^5.0.40
+        version: 5.0.40(zod@4.4.3)
       '@assistant-ui/ai-sdk':
         specifier: latest
         version: 0.0.3(@types/react@19.2.18)(react@19.2.8)(zod@4.4.3)(zustand@5.0.15(@types/react@19.2.18)(react@19.2.8)(use-sync-external-store@1.6.0(react@19.2.8)))
