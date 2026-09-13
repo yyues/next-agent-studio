@@ -23,7 +23,8 @@ import {
 import { join, resolve } from "path";
 
 const hasBlobToken = !!process.env.BLOB_READ_WRITE_TOKEN;
-const LOCAL_ROOT = resolve(process.cwd());
+// turbopackIgnore: 本地回退才用的运行时动态路径,静态分析无法追踪,显式排除避免整个项目被 trace 进产物
+const LOCAL_ROOT = resolve(/*turbopackIgnore: true*/ process.cwd());
 
 function localPath(pathname: string): string {
   return join(LOCAL_ROOT, pathname);
