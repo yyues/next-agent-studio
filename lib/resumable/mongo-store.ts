@@ -84,7 +84,7 @@ export function createMongoResumableStreamStore(): MongoResumableStreamStore {
       const meta = await StreamMetaModel.findOneAndUpdate(
         { streamId },
         { $inc: { seq: 1 }, $set: { expireAt } },
-        { new: true },
+        { returnDocument: "after" },
       ).lean();
       if (!meta) return; // 流已被清理,丢块即可(consumer 侧 finish 检测兜底)
       // $inc 拿到 1..N,块序号减 1 对齐 cursor 语义(首块 cursor 为 0 填充值)

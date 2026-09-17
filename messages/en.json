@@ -177,7 +177,13 @@
     "saving": "Saving…",
     "loadFailed": "Failed to load roles.",
     "suggestions": "Starter suggestions",
-    "suggestionsPlaceholder": "One question per line, shown on the new-chat welcome screen (max 6)"
+    "suggestionsPlaceholder": "One question per line, shown on the new-chat welcome screen (max 6)",
+    "uploadSuccess": "Uploaded successfully",
+    "processing": "Processing on server…",
+    "duplicateContent": "An identical file already exists — no need to upload again",
+    "overwriteTitle": "Overwrite confirmation",
+    "overwriteConfirm": "\"{name}\" already exists. Overwrite it? The old content will be replaced.",
+    "overwriteAction": "Overwrite"
   },
   "login": {
     "title": "Welcome back",

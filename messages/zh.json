@@ -177,7 +177,13 @@
     "saving": "保存中…",
     "loadFailed": "角色列表加载失败",
     "suggestions": "开场建议问题",
-    "suggestionsPlaceholder": "每行一条,展示在新会话欢迎页(最多 6 条)"
+    "suggestionsPlaceholder": "每行一条,展示在新会话欢迎页(最多 6 条)",
+    "uploadSuccess": "上传成功",
+    "processing": "服务端处理中…",
+    "duplicateContent": "内容完全相同的文件已存在,无需重复上传",
+    "overwriteTitle": "覆盖确认",
+    "overwriteConfirm": "已存在同名条目「{name}」。是否覆盖上传?旧内容将被替换。",
+    "overwriteAction": "覆盖上传"
   },
   "login": {
     "title": "欢迎回来",

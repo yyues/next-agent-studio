@@ -23,7 +23,8 @@ import { createHash } from "crypto";
 import AdmZip from "adm-zip";
 import { connectToMongo } from "@/lib/mongodb";
 import { SkillDocModel } from "@/lib/models/skill-doc";
-import { blobPut } from "@/lib/blob";
+import { blobPut, blobListPathnames, blobDel } from "@/lib/blob";
+import { mapWithConcurrency } from "@/lib/utils";
 import { parseFrontmatter } from "@/lib/skills";
 
 const SKILLS_ROOT = resolve(process.cwd(), "skills");
@@ -162,31 +163,61 @@ export async function POST(
       ? skillMdEntry.entryName.split("/")[0] + "/"
       : null;
 
-    // 数据库去重校验
+    // 数据库去重校验(结构化错误码,前端据此分支:同名需确认后带 overwrite 重传)
     await connectToMongo();
     const existingByMd5 = await SkillDocModel.findOne({ roleId, md5 }).lean();
     if (existingByMd5) {
       return NextResponse.json(
         {
-          error: "A skill with identical content already exists.",
+          error: "DUPLICATE_CONTENT",
           existing: existingByMd5,
         },
         { status: 409 },
       );
     }
 
-    // 按 zip 原结构逐文件解压到 Vercel Blob 的 skills/{roleId}/{skillId}/ 前缀下
+    const overwrite =
+      new URL(req.url).searchParams.get("overwrite") === "true";
+    const existingById = await SkillDocModel.findOne({ roleId, skillId }).lean();
+    if (existingById && !overwrite) {
+      return NextResponse.json(
+        {
+          error: "SKILL_ID_EXISTS",
+          existing: {
+            skillId: existingById.skillId,
+            title: existingById.title,
+            version: existingById.version,
+          },
+        },
+        { status: 409 },
+      );
+    }
+
     const blobPrefix = `skills/${roleId}/${skillId}/`;
-    for (const entry of entries) {
-      if (entry.isDirectory) continue;
+
+    // 覆盖升级:先清掉旧 zip 的全部文件,避免旧结构残留(与 resources 路由对齐)
+    if (existingById) {
+      try {
+        const oldPathnames = await blobListPathnames(blobPrefix);
+        if (oldPathnames.length > 0) await blobDel(oldPathnames);
+      } catch {
+        // 旧文件清理失败不阻断覆盖写入
+      }
+    }
+
+    // 按 zip 原结构逐文件解压到 Vercel Blob 的 skills/{roleId}/{skillId}/ 前缀下;
+    // 远程 Blob 单次往返数百毫秒,并发写入(上限 6)避免随文件数线性变慢
+    const files = entries.flatMap((entry) => {
+      if (entry.isDirectory) return [];
       let relPath = entry.entryName;
       if (rootPrefix) {
-        if (!relPath.startsWith(rootPrefix)) continue; // 跳过 skill 目录之外的杂散文件
+        if (!relPath.startsWith(rootPrefix)) return []; // 跳过 skill 目录之外的杂散文件
         relPath = relPath.slice(rootPrefix.length);
       }
-      if (!relPath) continue;
-      await blobPut(blobPrefix + relPath, entry.getData());
-    }
+      if (!relPath) return [];
+      return [{ path: blobPrefix + relPath, data: entry.getData() }];
+    });
+    await mapWithConcurrency(files, 6, (f) => blobPut(f.path, f.data));
 
     // 写入数据库元记录（upsert：skillId 存在则更新）
     await SkillDocModel.findOneAndUpdate(
@@ -202,7 +233,7 @@ export async function POST(
         blobPath: blobPrefix,
         enabled: true,
       },
-      { upsert: true, new: true, setDefaultsOnInsert: true },
+      { upsert: true, returnDocument: "after", setDefaultsOnInsert: true },
     );
 
     return NextResponse.json({

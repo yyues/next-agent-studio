@@ -97,7 +97,7 @@ export async function PUT(req: Request, { params }: Params) {
         title,
         messages: body.messages,
       },
-      { upsert: true, new: true, setDefaultsOnInsert: true },
+      { upsert: true, returnDocument: "after", setDefaultsOnInsert: true },
     );
 
     return NextResponse.json({ saved: true, title });
@@ -121,7 +121,7 @@ export async function PATCH(req: Request, { params }: Params) {
     const doc = await ConversationModel.findOneAndUpdate(
       { userId, conversationId },
       { title: title.slice(0, 60) },
-      { new: true },
+      { returnDocument: "after" },
     ).lean();
     if (!doc) {
       return NextResponse.json({ error: "Conversation not found." }, { status: 404 });

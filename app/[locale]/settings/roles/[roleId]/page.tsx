@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { Link, useRouter } from "@/i18n/navigation";
 import { getClientRuntimeContext } from "@/lib/client-runtime-context";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -70,6 +71,72 @@ type RoleDetail = {
 
 const builtinRoleIds = new Set(["general", "developer"]);
 
+/* ---------- upload ---------- */
+
+type UploadPhase = "transferring" | "processing";
+
+type UploadState = {
+  kind: "skill" | "resource";
+  fileName: string;
+  percent: number;
+  phase: UploadPhase;
+};
+
+/** 服务端结构化拒绝(DUPLICATE_CONTENT / SKILL_ID_EXISTS / RESOURCE_EXISTS) */
+class UploadRejected extends Error {
+  code: string;
+  existing?: {
+    title?: string;
+    version?: string;
+    fileName?: string;
+  };
+  constructor(
+    code: string,
+    existing?: { title?: string; version?: string; fileName?: string },
+  ) {
+    super(code);
+    this.code = code;
+    this.existing = existing;
+  }
+}
+
+/** XHR 上传:fetch 拿不到 upload progress,用 xhr.upload.onprogress 回传字节百分比 */
+function uploadFileWithProgress(
+  url: string,
+  file: File,
+  onProgress: (percent: number, phase: UploadPhase) => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.responseType = "json";
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        onProgress(
+          Math.round((e.loaded / e.total) * 100),
+          "transferring",
+        );
+      }
+    };
+    xhr.upload.onload = () => onProgress(100, "processing");
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve();
+        return;
+      }
+      const body = (xhr.response ?? {}) as {
+        error?: string;
+        existing?: { title?: string; version?: string; fileName?: string };
+      };
+      reject(new UploadRejected(body.error ?? `HTTP ${xhr.status}`, body.existing));
+    };
+    xhr.onerror = () => reject(new Error("Network error"));
+    const fd = new FormData();
+    fd.append("file", file);
+    xhr.send(fd);
+  });
+}
+
 /* ---------- page component ---------- */
 
 export default function RoleDetailPage() {
@@ -104,6 +171,21 @@ export default function RoleDetailPage() {
   );
   const [deleteResourceTarget, setDeleteResourceTarget] =
     useState<ResourceInfo | null>(null);
+  /* 删除请求进行中:确认按钮 loading,防重复提交;
+   * ref 提供同帧级同步守卫,避免连续 Enter/双击在 state 异步更新前穿透 */
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const deleteBusyRef = useRef(false);
+
+  const beginDelete = () => {
+    if (deleteBusyRef.current) return false;
+    deleteBusyRef.current = true;
+    setDeleteBusy(true);
+    return true;
+  };
+  const endDelete = () => {
+    deleteBusyRef.current = false;
+    setDeleteBusy(false);
+  };
 
   /* mcp state */
   const [mcpServers, setMcpServers] = useState<McpServerInfo[]>([]);
@@ -113,12 +195,26 @@ export default function RoleDetailPage() {
   const [mcpTesting, setMcpTesting] = useState(false);
   const [mcpTestResult, setMcpTestResult] = useState("");
 
+  /* upload state */
+  const [upload, setUpload] = useState<UploadState | null>(null);
+  const [uploadNotice, setUploadNotice] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
+  const [overwriteTarget, setOverwriteTarget] = useState<{
+    kind: "skill" | "resource";
+    file: File;
+    name: string;
+  } | null>(null);
+
   const isBuiltin = builtinRoleIds.has(roleId);
 
   /* ----- data loading ----- */
 
-  const loadDetail = useCallback(async () => {
-    setLoading(true);
+  const loadDetail = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = opts?.silent ?? false;
+    // silent:已有数据时静默刷新,不把页面闪回全屏 loading
+    if (!silent) setLoading(true);
     setError("");
     try {
       const userId = getClientRuntimeContext().userId;
@@ -140,7 +236,7 @@ export default function RoleDetailPage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unknown error");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [roleId]);
 
@@ -186,6 +282,7 @@ export default function RoleDetailPage() {
   /* ----- handlers ----- */
 
   const handleDeleteRole = async () => {
+    if (!beginDelete()) return;
     try {
       const userId = getClientRuntimeContext().userId;
       const res = await fetch(
@@ -199,29 +296,86 @@ export default function RoleDetailPage() {
       router.push("/settings?tab=roles");
     } catch {
       setError(t("deleteFailed"));
+    } finally {
+      endDelete();
     }
     setDeleteOpen(false);
   };
 
-  const handleSkillUpload = async (file: File) => {
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const res = await fetch(
-        `/api/settings/skills/${encodeURIComponent(roleId)}`,
-        { method: "POST", body: formData },
-      );
-      if (!res.ok) {
-        const err = (await res.json()) as { error?: string };
-        throw new Error(err.error || t("saveFailed"));
+  /* ----- upload(技能与资源共用,带进度/去重/覆盖确认) ----- */
+
+  const performUpload = useCallback(
+    async (
+      kind: "skill" | "resource",
+      file: File,
+      opts?: { overwrite?: boolean },
+    ) => {
+      const base =
+        kind === "skill"
+          ? `/api/settings/skills/${encodeURIComponent(roleId)}`
+          : `/api/settings/roles/${encodeURIComponent(roleId)}/resources`;
+      const url = opts?.overwrite ? `${base}?overwrite=true` : base;
+      setUpload({ kind, fileName: file.name, percent: 0, phase: "transferring" });
+      setUploadNotice(null);
+      try {
+        await uploadFileWithProgress(url, file, (percent, phase) =>
+          setUpload((prev) => (prev ? { ...prev, percent, phase } : prev)),
+        );
+        setUploadNotice({ type: "success", text: t("uploadSuccess") });
+        setTimeout(
+          () => setUploadNotice((n) => (n?.type === "success" ? null : n)),
+          4000,
+        );
+        await loadDetail({ silent: true });
+      } catch (e) {
+        if (e instanceof UploadRejected) {
+          if (e.code === "DUPLICATE_CONTENT") {
+            setUploadNotice({ type: "error", text: t("duplicateContent") });
+          } else if (
+            e.code === "SKILL_ID_EXISTS" ||
+            e.code === "RESOURCE_EXISTS"
+          ) {
+            // 同名不同内容:弹确认,确认后带 overwrite 重传
+            setOverwriteTarget({
+              kind,
+              file,
+              name: e.existing?.title || e.existing?.fileName || file.name,
+            });
+          } else {
+            setUploadNotice({ type: "error", text: e.message });
+          }
+        } else {
+          setUploadNotice({
+            type: "error",
+            text: e instanceof Error ? e.message : t("saveFailed"),
+          });
+        }
+      } finally {
+        setUpload(null);
       }
-      await loadDetail();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : t("saveFailed"));
-    }
+    },
+    [roleId, t, loadDetail],
+  );
+
+  const handleSkillUpload = (file: File) => {
+    if (upload) return; // 上传进行中禁止重复触发
+    void performUpload("skill", file);
+  };
+
+  const handleResourceUpload = (file: File) => {
+    if (upload) return;
+    void performUpload("resource", file);
+  };
+
+  const confirmOverwrite = () => {
+    if (!overwriteTarget) return;
+    const target = overwriteTarget;
+    setOverwriteTarget(null);
+    void performUpload(target.kind, target.file, { overwrite: true });
   };
 
   const handleSkillDelete = async (skillId: string) => {
+    if (!beginDelete()) return;
     try {
       const res = await fetch(
         `/api/settings/skills/${encodeURIComponent(roleId)}/${encodeURIComponent(skillId)}`,
@@ -232,31 +386,16 @@ export default function RoleDetailPage() {
         throw new Error(err.error || t("deleteFailed"));
       }
       setDeleteSkillTarget(null);
-      await loadDetail();
+      await loadDetail({ silent: true });
     } catch (e) {
       setError(e instanceof Error ? e.message : t("deleteFailed"));
-    }
-  };
-
-  const handleResourceUpload = async (file: File) => {
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const res = await fetch(
-        `/api/settings/roles/${encodeURIComponent(roleId)}/resources`,
-        { method: "POST", body: formData },
-      );
-      if (!res.ok) {
-        const err = (await res.json()) as { error?: string };
-        throw new Error(err.error || t("saveFailed"));
-      }
-      await loadDetail();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : t("saveFailed"));
+    } finally {
+      endDelete();
     }
   };
 
   const handleResourceDelete = async (resourceId: string) => {
+    if (!beginDelete()) return;
     try {
       const res = await fetch(
         `/api/settings/roles/${encodeURIComponent(roleId)}/resources/${encodeURIComponent(resourceId)}`,
@@ -267,9 +406,11 @@ export default function RoleDetailPage() {
         throw new Error(err.error || t("deleteFailed"));
       }
       setDeleteResourceTarget(null);
-      await loadDetail();
+      await loadDetail({ silent: true });
     } catch (e) {
       setError(e instanceof Error ? e.message : t("deleteFailed"));
+    } finally {
+      endDelete();
     }
   };
 
@@ -502,6 +643,20 @@ export default function RoleDetailPage() {
           <p className="text-destructive mb-4 text-sm">{error}</p>
         )}
 
+        {uploadNotice && (
+          <p
+            role="alert"
+            className={cn(
+              "mb-4 rounded-md px-3 py-2 text-xs",
+              uploadNotice.type === "success"
+                ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                : "bg-destructive/10 text-destructive",
+            )}
+          >
+            {uploadNotice.text}
+          </p>
+        )}
+
         {/* basic info card */}
         <section className="border-border/60 bg-card mb-6 rounded-lg border p-5">
           <h2 className="mb-4 text-sm font-medium">{t("detail")}</h2>
@@ -615,8 +770,11 @@ export default function RoleDetailPage() {
               accept=".zip"
               onSelect={handleSkillUpload}
               label={t("uploadSkill")}
+              disabled={!!upload}
+              busy={upload?.kind === "skill"}
             />
           </div>
+          {upload?.kind === "skill" && <UploadProgress upload={upload} t={t} />}
           {skills.length === 0 ? (
             <p className="text-muted-foreground text-sm">{t("noSkills")}</p>
           ) : (
@@ -662,8 +820,13 @@ export default function RoleDetailPage() {
               accept=".zip"
               onSelect={handleResourceUpload}
               label={t("uploadResource")}
+              disabled={!!upload}
+              busy={upload?.kind === "resource"}
             />
           </div>
+          {upload?.kind === "resource" && (
+            <UploadProgress upload={upload} t={t} />
+          )}
           {resources.length === 0 ? (
             <p className="text-muted-foreground text-sm">{t("noResources")}</p>
           ) : (
@@ -842,9 +1005,40 @@ export default function RoleDetailPage() {
         </DialogContent>
       </Dialog>
 
+      {/* overwrite confirm dialog */}
+      <Dialog
+        open={!!overwriteTarget}
+        onOpenChange={() => setOverwriteTarget(null)}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{t("overwriteTitle")}</DialogTitle>
+            <DialogDescription>
+              {t("overwriteConfirm", { name: overwriteTarget?.name ?? "" })}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOverwriteTarget(null)}>
+              {tc("cancel")}
+            </Button>
+            <Button variant="destructive" onClick={confirmOverwrite}>
+              {t("overwriteAction")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* delete role dialog */}
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <DialogContent className="sm:max-w-sm">
+        <DialogContent
+          className="sm:max-w-sm"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !deleteBusy) {
+              e.preventDefault();
+              void handleDeleteRole();
+            }
+          }}
+        >
           <DialogHeader>
             <DialogTitle>{t("delete")}</DialogTitle>
             <DialogDescription>
@@ -852,10 +1046,20 @@ export default function RoleDetailPage() {
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteOpen(false)}>
+            <Button
+              variant="outline"
+              onClick={() => setDeleteOpen(false)}
+              disabled={deleteBusy}
+            >
               {tc("cancel")}
             </Button>
-            <Button variant="destructive" onClick={handleDeleteRole}>
+            <Button
+              variant="destructive"
+              onClick={() => void handleDeleteRole()}
+              disabled={deleteBusy}
+              className="gap-1.5"
+            >
+              {deleteBusy && <Loader2Icon className="size-3.5 animate-spin" />}
               {tc("delete")}
             </Button>
           </DialogFooter>
@@ -867,7 +1071,15 @@ export default function RoleDetailPage() {
         open={!!deleteSkillTarget}
         onOpenChange={() => setDeleteSkillTarget(null)}
       >
-        <DialogContent className="sm:max-w-sm">
+        <DialogContent
+          className="sm:max-w-sm"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && deleteSkillTarget && !deleteBusy) {
+              e.preventDefault();
+              void handleSkillDelete(deleteSkillTarget.skillId);
+            }
+          }}
+        >
           <DialogHeader>
             <DialogTitle>{t("delete")}</DialogTitle>
             <DialogDescription>
@@ -880,15 +1092,19 @@ export default function RoleDetailPage() {
             <Button
               variant="outline"
               onClick={() => setDeleteSkillTarget(null)}
+              disabled={deleteBusy}
             >
               {tc("cancel")}
             </Button>
             <Button
               variant="destructive"
               onClick={() =>
-                deleteSkillTarget && handleSkillDelete(deleteSkillTarget.skillId)
+                deleteSkillTarget && void handleSkillDelete(deleteSkillTarget.skillId)
               }
+              disabled={deleteBusy}
+              className="gap-1.5"
             >
+              {deleteBusy && <Loader2Icon className="size-3.5 animate-spin" />}
               {tc("delete")}
             </Button>
           </DialogFooter>
@@ -900,7 +1116,15 @@ export default function RoleDetailPage() {
         open={!!deleteResourceTarget}
         onOpenChange={() => setDeleteResourceTarget(null)}
       >
-        <DialogContent className="sm:max-w-sm">
+        <DialogContent
+          className="sm:max-w-sm"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && deleteResourceTarget && !deleteBusy) {
+              e.preventDefault();
+              void handleResourceDelete(deleteResourceTarget.resourceId);
+            }
+          }}
+        >
           <DialogHeader>
             <DialogTitle>{t("delete")}</DialogTitle>
             <DialogDescription>
@@ -915,6 +1139,7 @@ export default function RoleDetailPage() {
             <Button
               variant="outline"
               onClick={() => setDeleteResourceTarget(null)}
+              disabled={deleteBusy}
             >
               {tc("cancel")}
             </Button>
@@ -922,9 +1147,12 @@ export default function RoleDetailPage() {
               variant="destructive"
               onClick={() =>
                 deleteResourceTarget &&
-                handleResourceDelete(deleteResourceTarget.resourceId)
+                void handleResourceDelete(deleteResourceTarget.resourceId)
               }
+              disabled={deleteBusy}
+              className="gap-1.5"
             >
+              {deleteBusy && <Loader2Icon className="size-3.5 animate-spin" />}
               {tc("delete")}
             </Button>
           </DialogFooter>
@@ -965,11 +1193,40 @@ const SaveIndicator: FC<{
   );
 };
 
+/** 上传进度行:文件名 + 百分比/处理中 + 进度条(处理阶段满格脉冲提示仍在服务端处理) */
+const UploadProgress: FC<{
+  upload: UploadState;
+  t: (key: string) => string;
+}> = ({ upload, t }) => (
+  <div className="border-border/40 mb-3 rounded-md border px-3 py-2.5">
+    <div className="flex items-center gap-2 text-xs">
+      <Loader2Icon className="text-primary size-3.5 shrink-0 animate-spin" />
+      <span className="min-w-0 flex-1 truncate font-medium">
+        {upload.fileName}
+      </span>
+      <span className="text-muted-foreground shrink-0 tabular-nums">
+        {upload.phase === "transferring" ? `${upload.percent}%` : t("processing")}
+      </span>
+    </div>
+    <div className="bg-muted mt-2 h-1.5 w-full overflow-hidden rounded-full">
+      <div
+        className={cn(
+          "bg-primary h-full rounded-full transition-[width] duration-200",
+          upload.phase === "processing" && "animate-pulse",
+        )}
+        style={{ width: `${upload.percent}%` }}
+      />
+    </div>
+  </div>
+);
+
 const FilePickerButton: FC<{
   accept: string;
   onSelect: (file: File) => void;
   label: string;
-}> = ({ accept, onSelect, label }) => {
+  disabled?: boolean;
+  busy?: boolean;
+}> = ({ accept, onSelect, label, disabled, busy }) => {
   const inputRef = useRef<HTMLInputElement>(null);
   return (
     <>
@@ -978,6 +1235,7 @@ const FilePickerButton: FC<{
         type="file"
         accept={accept}
         className="hidden"
+        disabled={disabled}
         onChange={(e) => {
           const file = e.target.files?.[0];
           if (file) onSelect(file);
@@ -988,9 +1246,14 @@ const FilePickerButton: FC<{
         variant="outline"
         size="sm"
         className="gap-1.5"
+        disabled={disabled}
         onClick={() => inputRef.current?.click()}
       >
-        <UploadIcon className="size-3.5" />
+        {busy ? (
+          <Loader2Icon className="size-3.5 animate-spin" />
+        ) : (
+          <UploadIcon className="size-3.5" />
+        )}
         {label}
       </Button>
     </>

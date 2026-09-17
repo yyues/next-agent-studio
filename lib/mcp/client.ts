@@ -94,7 +94,7 @@ export async function upsertMcpServer(
       headers: encryptSecretMap(headers),
       enabled: payload.enabled ?? true,
     },
-    { new: true, upsert: true, setDefaultsOnInsert: true },
+    { returnDocument: "after", upsert: true, setDefaultsOnInsert: true },
   ).lean();
 
   if (!doc) throw new Error("Failed to save MCP server.");

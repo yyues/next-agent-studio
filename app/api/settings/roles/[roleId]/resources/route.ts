@@ -14,6 +14,7 @@ import AdmZip from "adm-zip";
 import { connectToMongo } from "@/lib/mongodb";
 import { RoleResourceModel } from "@/lib/models/role-resource";
 import { blobPut, blobListPathnames, blobDel } from "@/lib/blob";
+import { mapWithConcurrency } from "@/lib/utils";
 import { getProviderSettings, normalizeUserId } from "@/lib/server-settings";
 import { indexResourceFromBlob } from "@/lib/rag";
 import { getAuthUserId } from "@/lib/auth-request";
@@ -94,7 +95,7 @@ export async function POST(
     const existing = await RoleResourceModel.findOne({ roleId, md5 }).lean();
     if (existing) {
       return NextResponse.json(
-        { error: "A resource with identical content already exists.", existing },
+        { error: "DUPLICATE_CONTENT", existing },
         { status: 409 },
       );
     }
@@ -102,7 +103,24 @@ export async function POST(
     const resourceId = sanitizeName(file.name);
     const blobPrefix = `resources/${roleId}/${resourceId}/`;
 
-    // 同名资源先清理旧 blob（保持覆盖上传的干净状态）
+    // 同名资源(文件名相同、内容不同)默认拒绝,确认覆盖后才清理旧 blob 重传
+    const overwrite =
+      new URL(req.url).searchParams.get("overwrite") === "true";
+    const existingById = await RoleResourceModel.findOne({
+      roleId,
+      resourceId,
+    }).lean();
+    if (existingById && !overwrite) {
+      return NextResponse.json(
+        {
+          error: "RESOURCE_EXISTS",
+          existing: { resourceId, fileName: existingById.fileName },
+        },
+        { status: 409 },
+      );
+    }
+
+    // 清理旧 blob（保持覆盖上传的干净状态）
     try {
       const oldPathnames = await blobListPathnames(blobPrefix);
       if (oldPathnames.length > 0) await blobDel(oldPathnames);
@@ -120,16 +138,18 @@ export async function POST(
         ? firstDir.entryName
         : null;
 
-    for (const entry of entries) {
-      if (entry.isDirectory) continue;
+    // 远程 Blob 单次往返数百毫秒,并发写入(上限 6)避免随文件数线性变慢
+    const files = entries.flatMap((entry) => {
+      if (entry.isDirectory) return [];
       const entryName = rootPrefix
         ? entry.entryName.startsWith(rootPrefix)
           ? entry.entryName.slice(rootPrefix.length)
           : entry.entryName
         : entry.entryName;
-      if (!entryName) continue;
-      await blobPut(blobPrefix + entryName, entry.getData());
-    }
+      if (!entryName) return [];
+      return [{ path: blobPrefix + entryName, data: entry.getData() }];
+    });
+    await mapWithConcurrency(files, 6, (f) => blobPut(f.path, f.data));
 
     await RoleResourceModel.findOneAndUpdate(
       { roleId, resourceId },
@@ -141,7 +161,7 @@ export async function POST(
         filePath: `resources/${roleId}/${resourceId}`,
         blobPrefix,
       },
-      { upsert: true, new: true, setDefaultsOnInsert: true },
+      { upsert: true, returnDocument: "after", setDefaultsOnInsert: true },
     );
 
     // 切片 + 向量化入库（RAG 索引）。失败不阻断上传，仅返回未索引标记。

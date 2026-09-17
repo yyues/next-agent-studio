@@ -397,7 +397,7 @@ export async function upsertProviderEntry(
       // 首个供应商自动激活
       active: existing?.active ?? count === 0,
     },
-    { new: true, upsert: true, setDefaultsOnInsert: true },
+    { returnDocument: "after", upsert: true, setDefaultsOnInsert: true },
   ).lean();
 
   return doc;
@@ -474,7 +474,7 @@ export async function upsertEmbeddingSettings(
       embeddingBaseUrl,
       embeddingApiKey,
     },
-    { upsert: true, new: true, setDefaultsOnInsert: true },
+    { upsert: true, returnDocument: "after", setDefaultsOnInsert: true },
   ).lean();
 
   return {
@@ -520,7 +520,7 @@ export async function upsertProviderSettings(
       embeddingApiKey: encryptSecret(normalized.embeddingApiKey),
       userId,
     },
-    { new: true, upsert: true, setDefaultsOnInsert: true },
+    { returnDocument: "after", upsert: true, setDefaultsOnInsert: true },
   ).lean();
 
   if (!doc) {
@@ -636,7 +636,7 @@ export async function setCurrentRole(userId: string, roleId: string) {
   await UserSettingModel.findOneAndUpdate(
     { userId },
     { userId, currentRoleId: roleId },
-    { upsert: true, new: true, setDefaultsOnInsert: true },
+    { upsert: true, returnDocument: "after", setDefaultsOnInsert: true },
   );
 
   return {
@@ -831,7 +831,7 @@ export async function updateRole(
   const doc = await RoleProfileModel.findOneAndUpdate(
     { userId, roleId },
     { $set: update },
-    { new: true },
+    { returnDocument: "after" },
   ).lean();
 
   if (!doc) {

@@ -9,6 +9,7 @@ import {
 import {
   useCallback,
   useEffect,
+  useRef,
   useState,
   type FC,
 } from "react";
@@ -21,7 +22,9 @@ import {
   XIcon,
   MessageSquareIcon,
   BotIcon,
+  Loader2Icon,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 const SIDEBAR_COLLAPSED_KEY = "sidebar-collapsed";
@@ -142,21 +145,67 @@ export const ConversationSidebar: FC<{
   const aui = useAui();
 
   const threadCount = useAuiState((s) => s.threads.threadIds.length);
+  const threadIds = useAuiState((s) => s.threads.threadIds);
   const [deletingTarget, setDeletingTarget] = useState<{
     id: string;
     title: string;
   } | null>(null);
+  /* 删除请求进行中:确认按钮 loading,防重复提交(runtime delete 无返回 Promise,
+   * 以目标线程从列表消失作为完成信号,超时兜底复位);
+   * ref 提供同帧级同步守卫,避免连续 Enter/双击在 state 异步更新前穿透 */
+  const [deleting, setDeleting] = useState(false);
+  const deletingRef = useRef(false);
 
   const confirmDelete = useCallback(() => {
-    if (!deletingTarget) return;
+    if (!deletingTarget || deleting || deletingRef.current) return;
+    deletingRef.current = true;
+    setDeleting(true);
     const { id } = deletingTarget;
-    setDeletingTarget(null);
     try {
       void aui.threads.item({ id }).delete();
     } catch {
       // 线程已不在列表(被并发删除等),静默忽略
+      deletingRef.current = false;
+      setDeleting(false);
+      setDeletingTarget(null);
     }
-  }, [deletingTarget, aui]);
+  }, [deletingTarget, deleting, aui]);
+
+  // 删除完成信号:目标线程已从列表消失
+  useEffect(() => {
+    if (!deleting || !deletingTarget) return;
+    if (!threadIds.includes(deletingTarget.id)) {
+      deletingRef.current = false;
+      setDeleting(false);
+      setDeletingTarget(null);
+    }
+  }, [threadIds, deleting, deletingTarget]);
+
+  // 超时兜底(网络失败等场景避免按钮永久 loading)
+  useEffect(() => {
+    if (!deleting) return;
+    const timer = setTimeout(() => {
+      deletingRef.current = false;
+      setDeleting(false);
+    }, 15000);
+    return () => clearTimeout(timer);
+  }, [deleting]);
+
+  // 键盘支持:Enter 确认删除,Esc 关闭弹窗
+  useEffect(() => {
+    if (!deletingTarget) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setDeletingTarget(null);
+      } else if (e.key === "Enter" && !deleting) {
+        e.preventDefault();
+        confirmDelete();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [deletingTarget, deleting, confirmDelete]);
 
   if (collapsed) return null;
 
@@ -234,20 +283,24 @@ export const ConversationSidebar: FC<{
               })}
             </p>
             <div className="mt-4 flex justify-end gap-2">
-              <button
-                type="button"
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={() => setDeletingTarget(null)}
-                className="hover:bg-muted rounded-md px-3 py-1.5 text-sm"
+                disabled={deleting}
               >
                 {t("cancel")}
-              </button>
-              <button
-                type="button"
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                className="gap-1.5"
                 onClick={confirmDelete}
-                className="bg-destructive text-destructive-foreground hover:bg-destructive/90 rounded-md px-3 py-1.5 text-sm"
+                disabled={deleting}
               >
+                {deleting && <Loader2Icon className="size-3.5 animate-spin" />}
                 {t("deleteThread")}
-              </button>
+              </Button>
             </div>
           </div>
         </div>
