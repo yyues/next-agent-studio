@@ -29,7 +29,7 @@ export const RoleSwitcher: FC<RoleSwitcherProps> = ({ onRoleSwitch }) => {
   const [currentRoleId, setCurrentRoleId] = useState("general");
   const [loading, setLoading] = useState(true);
 
-  const loadRoles = useCallback(async () => {
+  const loadRoles = useCallback(async (opts?: { syncFromDb?: boolean }) => {
     try {
       const ctx = getClientRuntimeContext();
       const res = await fetch(
@@ -41,13 +41,17 @@ export const RoleSwitcher: FC<RoleSwitcherProps> = ({ onRoleSwitch }) => {
         roles: RoleItem[];
       };
       setRoles(data.roles.filter((r) => r.enabled));
-      // 仅当 DB 的 currentRoleId 与当前上下文不同时才同步（如首次加载）；
-      // 不在每次拉取后无条件写回，避免触发 RUNTIME_CONTEXT_UPDATED_EVENT 自循环
-      if (data.currentRoleId && data.currentRoleId !== ctx.roleId) {
+      // 仅"全新环境"(本地从未存过上下文)才用 DB 的 currentRoleId 兜底;
+      // 常态下 localStorage/URL 才是事实源,回写 DB 值会与切换竞态导致选中项回跳
+      if (
+        opts?.syncFromDb &&
+        data.currentRoleId &&
+        data.currentRoleId !== getClientRuntimeContext().roleId
+      ) {
         setClientRuntimeContext({ roleId: data.currentRoleId });
         setCurrentRoleId(data.currentRoleId);
       } else {
-        setCurrentRoleId(ctx.roleId);
+        setCurrentRoleId(getClientRuntimeContext().roleId);
       }
     } catch {
       // silently ignore
@@ -57,26 +61,28 @@ export const RoleSwitcher: FC<RoleSwitcherProps> = ({ onRoleSwitch }) => {
   }, []);
 
   useEffect(() => {
-    void loadRoles();
-    const onUpdate = () => void loadRoles();
+    // 挂载时拉列表;syncFromDb 仅在本地无上下文(首次访问)时用 DB 兜底
+    const firstVisit = !window.localStorage.getItem("assistant-runtime-context");
+    void loadRoles({ syncFromDb: firstVisit });
+    // 角色切换不改变角色列表,事件只同步选中项——不重拉列表,
+    // 避免与切换时未提交的 PUT 竞态把选中项回写为 DB 旧值
+    const onUpdate = () =>
+      setCurrentRoleId(getClientRuntimeContext().roleId);
     window.addEventListener(RUNTIME_CONTEXT_UPDATED_EVENT, onUpdate);
     return () => window.removeEventListener(RUNTIME_CONTEXT_UPDATED_EVENT, onUpdate);
   }, [loadRoles]);
 
-  const handleSwitch = async (roleId: string) => {
+  const handleSwitch = (roleId: string) => {
     if (roleId === currentRoleId) return;
     const ctx = getClientRuntimeContext();
     setCurrentRoleId(roleId);
     setClientRuntimeContext({ roleId });
-    try {
-      await fetch("/api/settings/roles", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: ctx.userId, roleId }),
-      });
-    } catch {
-      // silently ignore
-    }
+    // 持久化默认角色不阻塞切换(上下文才是会话内事实源),失败静默
+    void fetch("/api/settings/roles", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: ctx.userId, roleId }),
+    }).catch(() => undefined);
     // 通知对话页同步 URL 查询参数(当前会话继续,不新建)
     onRoleSwitch?.(roleId);
   };
