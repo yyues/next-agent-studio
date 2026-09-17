@@ -555,39 +555,53 @@ export async function testProviderSettings(payload: Partial<ProviderSettings>) {
  * 对每个内置角色执行 upsert，确保数据库中始终存在默认角色记录
  */
 async function seedDefaultRoles(userId: string) {
-  for (const role of defaultRoleProfiles) {
-    // pipeline upsert:插入时写全量;已存在时各字段仅在缺失($ifNull)时回填,
-    // 兼容旧文档升级(如 suggestions),用户显式改过的值不会被覆盖
-    await RoleProfileModel.findOneAndUpdate(
-      { userId, roleId: role.roleId },
-      [
-        {
-          $set: {
-            userId: { $ifNull: ["$userId", userId] },
-            roleId: { $ifNull: ["$roleId", role.roleId] },
-            displayName: { $ifNull: ["$displayName", role.displayName] },
-            description: { $ifNull: ["$description", role.description] },
-            enabled: { $ifNull: ["$enabled", role.enabled] },
-            systemPrompt: { $ifNull: ["$systemPrompt", role.systemPrompt] },
-            skillIds: { $ifNull: ["$skillIds", role.skillIds] },
-            toolToggles: { $ifNull: ["$toolToggles", role.toolToggles] },
-            priority: { $ifNull: ["$priority", role.priority] },
-            suggestions: { $ifNull: ["$suggestions", role.suggestions] },
+  // 并行 upsert(跨洋写单次数百毫秒)
+  await Promise.all(
+    defaultRoleProfiles.map((role) =>
+      RoleProfileModel.findOneAndUpdate(
+        { userId, roleId: role.roleId },
+        [
+          {
+            $set: {
+              userId: { $ifNull: ["$userId", userId] },
+              roleId: { $ifNull: ["$roleId", role.roleId] },
+              displayName: { $ifNull: ["$displayName", role.displayName] },
+              description: { $ifNull: ["$description", role.description] },
+              enabled: { $ifNull: ["$enabled", role.enabled] },
+              systemPrompt: { $ifNull: ["$systemPrompt", role.systemPrompt] },
+              skillIds: { $ifNull: ["$skillIds", role.skillIds] },
+              toolToggles: { $ifNull: ["$toolToggles", role.toolToggles] },
+              priority: { $ifNull: ["$priority", role.priority] },
+              suggestions: { $ifNull: ["$suggestions", role.suggestions] },
+            },
           },
-        },
-      ],
-      { upsert: true, updatePipeline: true },
-    );
-  }
+        ],
+        { upsert: true, updatePipeline: true },
+      ),
+    ),
+  );
 }
 export async function getRoleSettings(userId: string) {
   try {
     await connectToMongo();
-    await seedDefaultRoles(userId);
 
-    const userSetting = await UserSettingModel.findOne({ userId }).lean();
-    const dbRoles = (await RoleProfileModel.find({ userId }).lean()).map(
-      (doc) => toRoleProfile(doc as Record<string, unknown>),
+    // 两个读取并行;常态(已播种)不再执行两次播种写
+    const [userSetting, dbRoleDocs] = await Promise.all([
+      UserSettingModel.findOne({ userId }).lean(),
+      RoleProfileModel.find({ userId }).lean(),
+    ]);
+
+    let docs = dbRoleDocs;
+    const hasAllDefaults = defaultRoleProfiles.every((d) =>
+      docs.some((doc) => doc.roleId === d.roleId),
+    );
+    if (!hasAllDefaults) {
+      await seedDefaultRoles(userId);
+      docs = await RoleProfileModel.find({ userId }).lean();
+    }
+
+    const dbRoles = docs.map((doc) =>
+      toRoleProfile(doc as Record<string, unknown>),
     );
 
     const mergedById = new Map(
@@ -862,10 +876,14 @@ export async function deleteRole(userId: string, roleId: string) {
 
 export async function getRoleById(userId: string, roleId: string) {
   await connectToMongo();
-  await seedDefaultRoles(userId);
 
   const defaultRole = defaultRoleProfiles.find((r) => r.roleId === roleId);
-  const doc = await RoleProfileModel.findOne({ userId, roleId }).lean();
+  let doc = await RoleProfileModel.findOne({ userId, roleId }).lean();
+  // 仅当查询的是内置角色且库中缺失时才播种(常态零写)
+  if (!doc && defaultRole) {
+    await seedDefaultRoles(userId);
+    doc = await RoleProfileModel.findOne({ userId, roleId }).lean();
+  }
   const role = doc
     ? toRoleProfile(doc as Record<string, unknown>)
     : defaultRole;

@@ -20,7 +20,10 @@ import { McpPicker } from "@/components/assistant-ui/mcp-picker";
 import { ThinkingIndicator } from "@/components/thinking-indicator";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { getClientRuntimeContext } from "@/lib/client-runtime-context";
+import {
+  RUNTIME_CONTEXT_UPDATED_EVENT,
+  getClientRuntimeContext,
+} from "@/lib/client-runtime-context";
 import {
   ActionBarMorePrimitive,
   ActionBarPrimitive,
@@ -201,16 +204,17 @@ const ThreadWelcome: FC = () => {
 
 /**
  * 开场建议问题:按当前角色从 /api/settings/roles 拉取(角色详情里可编辑),
- * 点击即作为用户消息发送。仅在新会话且输入框为空时展示。
+ * 点击即作为用户消息发送。仅在新会话且输入框为空时展示;
+ * 订阅角色变化(对话内切换角色后重新拉取新角色的建议)。
  */
 const ThreadSuggestions: FC = () => {
   const t = useTranslations("thread");
   const aui = useAui();
   const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [roleId, setRoleId] = useState(() => getClientRuntimeContext().roleId);
 
   useEffect(() => {
     let cancelled = false;
-    const roleId = getClientRuntimeContext().roleId;
     const userId = getClientRuntimeContext().userId;
     void (async () => {
       try {
@@ -227,6 +231,13 @@ const ThreadSuggestions: FC = () => {
     return () => {
       cancelled = true;
     };
+  }, [roleId]);
+
+  useEffect(() => {
+    const onUpdate = () => setRoleId(getClientRuntimeContext().roleId);
+    window.addEventListener(RUNTIME_CONTEXT_UPDATED_EVENT, onUpdate);
+    return () =>
+      window.removeEventListener(RUNTIME_CONTEXT_UPDATED_EVENT, onUpdate);
   }, []);
 
   if (suggestions.length === 0) return null;

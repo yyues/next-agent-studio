@@ -20,6 +20,7 @@ import type { SkillModule } from "./types";
 import { connectToMongo } from "@/lib/mongodb";
 import { SkillDocModel } from "@/lib/models/skill-doc";
 import { blobGetText, blobListPathnames, blobDel } from "@/lib/blob";
+import { mapWithConcurrency } from "@/lib/utils";
 
 // 项目根目录下的 skills 文件夹
 const SKILLS_ROOT = resolve(process.cwd(), "skills");
@@ -117,54 +118,58 @@ async function loadBuiltinSkills(roleId: string): Promise<SkillModule[]> {
   return skills;
 }
 
+/** 读取单个上传技能:SKILL.md 与文件列表并行拉取,prompts/knowledge 并发读 */
+async function loadSkillForDoc(
+  roleId: string,
+  doc: { skillId: string; title: string; description?: string; version?: string; blobPath?: string },
+): Promise<SkillModule | null> {
+  const prefix = doc.blobPath || `skills/${roleId}/${doc.skillId}/`;
+  // SKILL.md 路径确定,可与列表请求并行(单次 Blob 往返数百毫秒起)
+  const [pathnames, raw] = await Promise.all([
+    blobListPathnames(prefix),
+    blobGetText(`${prefix}SKILL.md`),
+  ]);
+  if (pathnames.length === 0 || !raw) return null;
+
+  const { body } = parseFrontmatter(raw);
+  const extraPathnames = pathnames.filter(
+    (p) => p.startsWith(`${prefix}prompts/`) || p.startsWith(`${prefix}knowledge/`),
+  );
+  const texts = await mapWithConcurrency(extraPathnames, 6, (p) =>
+    blobGetText(p).then((t) => ({ p, t })),
+  );
+  const prompts: string[] = [];
+  const knowledge: string[] = [];
+  for (const { p, t } of texts) {
+    if (!t) continue;
+    if (p.includes("/prompts/")) prompts.push(t);
+    else knowledge.push(t);
+  }
+
+  return {
+    id: doc.skillId,
+    title: doc.title,
+    description: doc.description,
+    instructions: body,
+    prompts: prompts.length > 0 ? prompts : undefined,
+    knowledge: knowledge.length > 0 ? knowledge : undefined,
+    version: doc.version,
+  };
+}
+
 /**
  * 从 MongoDB + Vercel Blob 加载用户上传的 skill
- * （按 blobPath 前缀列出 zip 解压后的原始文件，读 SKILL.md + prompts/ + knowledge/）
+ * (按 blobPath 前缀列出 zip 解压后的原始文件,读 SKILL.md + prompts/ + knowledge/)
  */
 async function loadUploadedSkills(roleId: string): Promise<SkillModule[]> {
   try {
     await connectToMongo();
     const docs = await SkillDocModel.find({ roleId, enabled: true }).lean();
-    const skills: SkillModule[] = [];
-    for (const doc of docs) {
-      const prefix = doc.blobPath || `skills/${roleId}/${doc.skillId}/`;
-      const pathnames = await blobListPathnames(prefix);
-      if (pathnames.length === 0) continue;
-
-      // 找到 SKILL.md（前缀下任一层级，通常直接位于前缀下）
-      const skillMdPath = pathnames.find((p) => p === `${prefix}SKILL.md`);
-      if (!skillMdPath) continue;
-
-      const raw = await blobGetText(skillMdPath);
-      if (!raw) continue;
-      const { body } = parseFrontmatter(raw);
-
-      // 收集 prompts/ 与 knowledge/ 下的文件内容
-      const promptsPrefix = `${prefix}prompts/`;
-      const knowledgePrefix = `${prefix}knowledge/`;
-      const prompts: string[] = [];
-      const knowledge: string[] = [];
-      for (const p of pathnames) {
-        if (p.startsWith(promptsPrefix)) {
-          const t = await blobGetText(p);
-          if (t) prompts.push(t);
-        } else if (p.startsWith(knowledgePrefix)) {
-          const t = await blobGetText(p);
-          if (t) knowledge.push(t);
-        }
-      }
-
-      skills.push({
-        id: doc.skillId,
-        title: doc.title,
-        description: doc.description,
-        instructions: body,
-        prompts: prompts.length > 0 ? prompts : undefined,
-        knowledge: knowledge.length > 0 ? knowledge : undefined,
-        version: doc.version,
-      });
-    }
-    return skills;
+    // 技能间也并发:多个 skill 时不再串行累积跨洋往返
+    const modules = await mapWithConcurrency(docs, 4, (d) =>
+      loadSkillForDoc(roleId, d as never).catch(() => null),
+    );
+    return modules.filter((m): m is SkillModule => m !== null);
   } catch {
     return [];
   }
@@ -190,9 +195,25 @@ export async function loadSkillsByRoleId(
 }
 
 /**
- * 获取指定角色下所有可用的 skill ID 列表：合并内置 + 上传
+ * 获取指定角色下所有可用的 skill ID 列表:合并内置 + 上传。
+ * 只取 id,不读 Blob 内容(列表场景无需全文,跨洋读取单次数百毫秒起)。
  */
 export async function getAvailableSkillIds(roleId: string): Promise<string[]> {
-  const skills = await loadSkillsByRoleId(roleId);
-  return skills.map((s) => s.id);
+  const [builtin, docs] = await Promise.all([
+    loadBuiltinSkills(roleId),
+    (async () => {
+      try {
+        await connectToMongo();
+        return await SkillDocModel.find({ roleId, enabled: true })
+          .select("skillId")
+          .lean();
+      } catch {
+        return [];
+      }
+    })(),
+  ]);
+  const merged = new Map<string, string>();
+  for (const s of builtin) merged.set(s.id, s.id);
+  for (const d of docs) merged.set(String(d.skillId), String(d.skillId));
+  return Array.from(merged.keys());
 }
