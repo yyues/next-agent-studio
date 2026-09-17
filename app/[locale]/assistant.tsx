@@ -7,6 +7,7 @@ import {
   SimpleTextAttachmentAdapter,
   WebSpeechDictationAdapter,
   useAui,
+  useAuiState,
   useRemoteThreadListRuntime,
   type MessageFormatAdapter,
   type RemoteThreadListAdapter,
@@ -22,7 +23,7 @@ import {
   lastAssistantMessageIsCompleteWithToolCalls,
   type UIMessage,
 } from "ai";
-import { useCallback, useMemo, type FC, type ReactNode, useRef } from "react";
+import { useCallback, useEffect, useMemo, type FC, type ReactNode, useRef } from "react";
 import { getClientRuntimeContext, setClientRuntimeContext } from "@/lib/client-runtime-context";
 import { CONVERSATION_SAVED_EVENT } from "@/lib/conversation-events";
 
@@ -34,6 +35,26 @@ type ConversationSummary = {
 };
 
 const userId = () => getClientRuntimeContext().userId;
+
+/** 从消息列表推导标题:首条用户消息文本前 30 字符(generateTitle 与兜底重命名共用) */
+function firstUserTitle(
+  messages: readonly {
+    role: string;
+    content?: readonly { type: string; text?: string }[];
+  }[],
+): string {
+  for (const message of messages) {
+    if (message.role !== "user") continue;
+    const text = (message.content ?? [])
+      .filter((p): p is { type: "text"; text: string } => p.type === "text")
+      .map((p) => p.text)
+      .join(" ")
+      .trim()
+      .slice(0, 30);
+    if (text) return text;
+  }
+  return "";
+}
 
 /**
  * 线程级 runtime adapter(history):线程挂载时按 remoteId 加载该会话的历史消息。
@@ -152,17 +173,7 @@ const createConversationAdapter = (): RemoteThreadListAdapter => ({
   },
 
   async generateTitle(_remoteId, messages) {
-    let title = "";
-    for (const message of messages) {
-      if (message.role !== "user") continue;
-      title = message.content
-        .filter((p): p is { type: "text"; text: string } => p.type === "text")
-        .map((p) => p.text)
-        .join(" ")
-        .trim()
-        .slice(0, 30);
-      if (title) break;
-    }
+    const title = firstUserTitle(messages);
     const [stream, controller] = createAssistantStreamController();
     controller.appendText(title || "新对话");
     controller.close();
@@ -216,6 +227,22 @@ export const Assistant: FC<AssistantProps> = ({
       const aui = useAui();
       const currentConversationId = () =>
         aui.threadListItem.getState().remoteId ?? activeIdRef.current;
+
+      // 标题兜底:URL 直接挂载的线程(如切角色产生的 /chat/<id>?roleId=...)
+      // 不经"new → initialize"链路,运行时的自动标题不会订阅;这里在
+      // 标题仍为空且已有用户消息时主动重命名(规则与 generateTitle 一致)
+      const itemTitle = useAuiState((s) => s.threadListItem.title);
+      const derivedTitle = useAuiState((s) => firstUserTitle(s.thread.messages));
+      useEffect(() => {
+        if (itemTitle || !derivedTitle) return;
+        const state = aui.threadListItem.getState();
+        if (state.status === "new") return; // 内置自动标题链路负责
+        try {
+          void aui.threads.item({ id: state.id }).rename(derivedTitle);
+        } catch {
+          // 状态竞争(如刚好被删除)忽略
+        }
+      }, [itemTitle, derivedTitle, aui]);
 
       return useChatRuntime({
         // 工具循环自动续发;MCP 工具审批(HITL)通过/拒绝后同样自动续发

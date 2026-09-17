@@ -84,7 +84,7 @@ const ThreadListItem: FC<{
         </>
       ) : (
         <>
-          <ThreadListItemPrimitive.Trigger className="hover:group-hover/item:translate-x-0.5 flex min-w-0 flex-1 items-center gap-2 py-0.5 text-left transition-transform duration-200">
+          <ThreadListItemPrimitive.Trigger className="hover:group-hover/item:translate-x-0.5 flex min-w-0 flex-1 items-center gap-2 rounded-md py-0.5 text-left transition-transform duration-200 outline-none focus-visible:bg-muted/60 focus-visible:ring-primary/40 focus-visible:ring-1">
             <MessageSquareIcon className="size-3.5 shrink-0 opacity-60" />
             <span className="truncate" title={title ?? undefined}>
               {title || t("untitledThread")}
@@ -105,7 +105,12 @@ const ThreadListItem: FC<{
             <ThreadListItemPrimitive.Delete
               className="text-muted-foreground hover:text-destructive"
               title={t("deleteThread")}
-              onClick={() => onDelete(itemId, title ?? "")}
+              onClick={(e) => {
+                // preventDefault 阻断 primitive 内置的立即删除
+                // (composeEventHandlers 会串联执行),删除统一走确认弹窗
+                e.preventDefault();
+                onDelete(itemId, title ?? "");
+              }}
             >
               <Trash2Icon className="size-3" />
             </ThreadListItemPrimitive.Delete>
@@ -146,7 +151,11 @@ export const ConversationSidebar: FC<{
     if (!deletingTarget) return;
     const { id } = deletingTarget;
     setDeletingTarget(null);
-    void aui.threads.item({ id }).delete();
+    try {
+      void aui.threads.item({ id }).delete();
+    } catch {
+      // 线程已不在列表(被并发删除等),静默忽略
+    }
   }, [deletingTarget, aui]);
 
   if (collapsed) return null;
