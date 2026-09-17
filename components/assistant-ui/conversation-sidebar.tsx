@@ -1,16 +1,18 @@
 "use client";
 
 import {
+  ThreadListItemPrimitive,
+  ThreadListPrimitive,
+  useAui,
+  useAuiState,
+} from "@assistant-ui/react";
+import {
   useCallback,
   useEffect,
   useState,
   type FC,
 } from "react";
-import { useParams } from "next/navigation";
-import { useRouter } from "@/i18n/navigation";
 import { useTranslations } from "next-intl";
-import { getClientRuntimeContext } from "@/lib/client-runtime-context";
-import { CONVERSATION_SAVED_EVENT } from "@/lib/conversation-events";
 import {
   PlusIcon,
   PencilIcon,
@@ -22,19 +24,102 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-type ConversationItem = {
-  conversationId: string;
-  roleId: string;
-  title: string;
-  updatedAt?: string;
-};
-
 const SIDEBAR_COLLAPSED_KEY = "sidebar-collapsed";
 
+/** 单条会话:切换/行内重命名/删除,激活态由 Root 的 data-active 驱动 */
+const ThreadListItem: FC<{
+  onDelete: (id: string, title: string) => void;
+}> = ({ onDelete }) => {
+  const t = useTranslations("thread");
+  const api = useAui();
+  const itemId = useAuiState((s) => s.threadListItem.id);
+  const title = useAuiState((s) => s.threadListItem.title);
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState("");
+
+  const submitRename = () => {
+    setEditing(false);
+    const next = value.trim();
+    if (!next || next === title) return;
+    const item = api.threads.item({ id: itemId });
+    void item.rename(next);
+  };
+
+  return (
+    <ThreadListItemPrimitive.Root
+      className={cn(
+        "aui-anim-item group relative flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm transition-colors duration-200",
+        "data-[active=true]:bg-primary/10 data-[active=true]:text-primary data-[active=true]:font-medium hover:bg-muted text-foreground/90",
+      )}
+    >
+      {/* 当前会话左侧指示条 */}
+      <span className="bg-primary absolute start-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full opacity-0 group-data-[active=true]:opacity-100" />
+      {editing ? (
+        <>
+          <input
+            autoFocus
+            value={value}
+            autoComplete="off"
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") submitRename();
+              if (e.key === "Escape") setEditing(false);
+            }}
+            className="bg-background border-input h-7 min-w-0 flex-1 rounded border px-1.5 text-sm outline-none"
+          />
+          <button
+            type="button"
+            onClick={submitRename}
+            className="text-muted-foreground hover:text-foreground shrink-0"
+          >
+            <CheckIcon className="size-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setEditing(false)}
+            className="text-muted-foreground hover:text-foreground shrink-0"
+          >
+            <XIcon className="size-3.5" />
+          </button>
+        </>
+      ) : (
+        <>
+          <ThreadListItemPrimitive.Trigger className="hover:group-hover/item:translate-x-0.5 flex min-w-0 flex-1 items-center gap-2 py-0.5 text-left transition-transform duration-200">
+            <MessageSquareIcon className="size-3.5 shrink-0 opacity-60" />
+            <span className="truncate" title={title ?? undefined}>
+              {title || t("untitledThread")}
+            </span>
+          </ThreadListItemPrimitive.Trigger>
+          <span className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
+            <button
+              type="button"
+              onClick={() => {
+                setValue(title ?? "");
+                setEditing(true);
+              }}
+              className="text-muted-foreground hover:text-foreground mr-1"
+              title={t("renameThread")}
+            >
+              <PencilIcon className="size-3" />
+            </button>
+            <ThreadListItemPrimitive.Delete
+              className="text-muted-foreground hover:text-destructive"
+              title={t("deleteThread")}
+              onClick={() => onDelete(itemId, title ?? "")}
+            >
+              <Trash2Icon className="size-3" />
+            </ThreadListItemPrimitive.Delete>
+          </span>
+        </>
+      )}
+    </ThreadListItemPrimitive.Root>
+  );
+};
+
 /**
- * 会话列表侧边栏:
- * - 新对话按钮 / 会话切换(路由跳转) / 行内重命名 / 删除(confirm)
- * - 监听 conversation-saved 事件与窗口 focus 刷新列表
+ * 会话列表侧边栏(ThreadListPrimitive 实现):
+ * - 列表/切换/新建/重命名/删除全部走 assistant-ui 运行时(经 adapter 落到 /api/conversations)
+ * - ↑/↓ 焦点导航与 Enter 切换由 ThreadListItemPrimitive.Root 内置(roving focus)
  * - 桌面端由父组件控制折叠;移动端以抽屉形式渲染(open 受控)
  */
 export const ConversationSidebar: FC<{
@@ -49,89 +134,20 @@ export const ConversationSidebar: FC<{
   appTitle = "Agent Studio",
 }) => {
   const t = useTranslations("thread");
-  const router = useRouter();
-  const params = useParams<{ chatId: string }>();
-  const currentChatId = params?.chatId;
+  const aui = useAui();
 
-  const [conversations, setConversations] = useState<ConversationItem[]>([]);
-  const [renamingId, setRenamingId] = useState<string | null>(null);
-  const [renameValue, setRenameValue] = useState("");
-  const [deletingTarget, setDeletingTarget] = useState<ConversationItem | null>(
-    null,
-  );
+  const threadCount = useAuiState((s) => s.threads.threadIds.length);
+  const [deletingTarget, setDeletingTarget] = useState<{
+    id: string;
+    title: string;
+  } | null>(null);
 
-  const loadList = useCallback(async () => {
-    try {
-      const userId = getClientRuntimeContext().userId;
-      const res = await fetch(
-        `/api/conversations?userId=${encodeURIComponent(userId)}`,
-      );
-      if (!res.ok) return;
-      const data = (await res.json()) as { conversations: ConversationItem[] };
-      setConversations(data.conversations ?? []);
-    } catch {
-      // 列表加载失败保持现状
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadList();
-    const onSaved = () => void loadList();
-    window.addEventListener(CONVERSATION_SAVED_EVENT, onSaved);
-    return () =>
-      window.removeEventListener(CONVERSATION_SAVED_EVENT, onSaved);
-  }, [loadList]);
-
-  const startNewChat = () => {
-    onCloseMobile?.();
-    router.push(`/chat/${crypto.randomUUID()}`);
-  };
-
-  const switchTo = (id: string) => {
-    if (id === currentChatId) {
-      onCloseMobile?.();
-      return;
-    }
-    onCloseMobile?.();
-    router.push(`/chat/${id}`);
-  };
-
-  const submitRename = async (item: ConversationItem) => {
-    const title = renameValue.trim();
-    setRenamingId(null);
-    if (!title || title === item.title) return;
-    try {
-      const userId = getClientRuntimeContext().userId;
-      await fetch(`/api/conversations/${encodeURIComponent(item.conversationId)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId, title }),
-      });
-      await loadList();
-    } catch {
-      // 重命名失败静默
-    }
-  };
-
-  const confirmDelete = async () => {
+  const confirmDelete = useCallback(() => {
     if (!deletingTarget) return;
-    const target = deletingTarget;
+    const { id } = deletingTarget;
     setDeletingTarget(null);
-    try {
-      const userId = getClientRuntimeContext().userId;
-      await fetch(
-        `/api/conversations/${encodeURIComponent(target.conversationId)}?userId=${encodeURIComponent(userId)}`,
-        { method: "DELETE" },
-      );
-      await loadList();
-      // 删除的是当前会话 → 跳到新对话
-      if (target.conversationId === currentChatId) {
-        router.push(`/chat/${crypto.randomUUID()}`);
-      }
-    } catch {
-      // 删除失败静默
-    }
-  };
+    void aui.threads.item({ id }).delete();
+  }, [deletingTarget, aui]);
 
   if (collapsed) return null;
 
@@ -147,107 +163,30 @@ export const ConversationSidebar: FC<{
         </span>
       </div>
 
-      <button
-        type="button"
-        onClick={startNewChat}
+      <ThreadListPrimitive.New
+        onClick={onCloseMobile}
         className="aui-lift bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.99] flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium shadow-sm"
       >
         <PlusIcon className="size-4" />
         {t("newChat")}
-      </button>
+      </ThreadListPrimitive.New>
 
       <div className="mt-3 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
-        {conversations.length === 0 ? (
-          <p className="text-muted-foreground px-2 py-4 text-xs">
-            {t("noThreads")}
-          </p>
-        ) : (
-          conversations.map((item, index) => {
-            const active = item.conversationId === currentChatId;
-            const renaming = renamingId === item.conversationId;
-            return (
-              <div
-                key={item.conversationId}
-                style={{ animationDelay: `${Math.min(index, 12) * 30}ms` }}
-                className={cn(
-                  "aui-anim-item group relative flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm transition-colors duration-200",
-                  active
-                    ? "bg-primary/10 text-primary font-medium"
-                    : "hover:bg-muted text-foreground/90",
-                )}
-              >
-                {/* 当前会话左侧指示条 */}
-                {active && (
-                  <span className="bg-primary absolute start-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full" />
-                )}
-                {renaming ? (
-                  <>
-                    <input
-                      autoFocus
-                      value={renameValue}
-                      autoComplete="off"
-                      onChange={(e) => setRenameValue(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") void submitRename(item);
-                        if (e.key === "Escape") setRenamingId(null);
-                      }}
-                      className="bg-background border-input h-7 min-w-0 flex-1 rounded border px-1.5 text-sm outline-none"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => void submitRename(item)}
-                      className="text-muted-foreground hover:text-foreground shrink-0"
-                    >
-                      <CheckIcon className="size-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setRenamingId(null)}
-                      className="text-muted-foreground hover:text-foreground shrink-0"
-                    >
-                      <XIcon className="size-3.5" />
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => switchTo(item.conversationId)}
-                      className="hover:group-hover/item:translate-x-0.5 flex min-w-0 flex-1 items-center gap-2 py-0.5 text-left transition-transform duration-200"
-                      title={item.title || item.conversationId}
-                    >
-                      <MessageSquareIcon className="size-3.5 shrink-0 opacity-60" />
-                      <span className="truncate">
-                        {item.title || t("untitledThread")}
-                      </span>
-                    </button>
-                    <span className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setRenamingId(item.conversationId);
-                          setRenameValue(item.title);
-                        }}
-                        className="text-muted-foreground hover:text-foreground mr-1"
-                        title={t("renameThread")}
-                      >
-                        <PencilIcon className="size-3" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setDeletingTarget(item)}
-                        className="text-muted-foreground hover:text-destructive"
-                        title={t("deleteThread")}
-                      >
-                        <Trash2Icon className="size-3" />
-                      </button>
-                    </span>
-                  </>
-                )}
-              </div>
-            );
-          })
-        )}
+        <ThreadListPrimitive.Root className="flex min-h-0 flex-1 flex-col gap-0.5">
+          {threadCount === 0 ? (
+            <p className="text-muted-foreground px-2 py-4 text-xs">
+              {t("noThreads")}
+            </p>
+          ) : (
+            <ThreadListPrimitive.Items>
+              {() => (
+                <ThreadListItem
+                  onDelete={(id, title) => setDeletingTarget({ id, title })}
+                />
+              )}
+            </ThreadListPrimitive.Items>
+          )}
+        </ThreadListPrimitive.Root>
       </div>
     </>
   );
@@ -282,7 +221,7 @@ export const ConversationSidebar: FC<{
           <div className="bg-card relative z-10 w-80 rounded-lg border border-border/60 p-4 shadow-lg">
             <p className="text-sm">
               {t("deleteThreadConfirm", {
-                name: deletingTarget.title || deletingTarget.conversationId,
+                name: deletingTarget.title || deletingTarget.id,
               })}
             </p>
             <div className="mt-4 flex justify-end gap-2">
@@ -295,7 +234,7 @@ export const ConversationSidebar: FC<{
               </button>
               <button
                 type="button"
-                onClick={() => void confirmDelete()}
+                onClick={confirmDelete}
                 className="bg-destructive text-destructive-foreground hover:bg-destructive/90 rounded-md px-3 py-1.5 text-sm"
               >
                 {t("deleteThread")}

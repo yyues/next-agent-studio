@@ -29,6 +29,8 @@
     "stopGenerating": "停止生成",
     "copy": "复制",
     "refresh": "刷新",
+    "feedbackPositive": "回答有帮助",
+    "feedbackNegative": "回答有问题",
     "editMessage": "编辑",
     "cancel": "取消",
     "updateMessage": "更新",
@@ -67,7 +69,8 @@
     "genDocGenerating": "正在生成文档",
     "genDocPreview": "预览",
     "genDocDownload": "下载",
-    "genDocTitle": "AI 生成的文档"
+    "genDocTitle": "AI 生成的文档",
+    "sendSuggestion": "发送"
   },
   "settings": {
     "title": "模型供应商",
@@ -174,7 +177,9 @@
     "noCustomRolesHint": "创建专属角色,定制系统提示词、技能与知识库",
     "missingFields": "请填写角色 ID 和显示名称",
     "saving": "保存中…",
-    "loadFailed": "角色列表加载失败"
+    "loadFailed": "角色列表加载失败",
+    "suggestions": "开场建议问题",
+    "suggestionsPlaceholder": "每行一条,展示在新会话欢迎页(最多 6 条)"
   },
   "login": {
     "title": "欢迎回来",

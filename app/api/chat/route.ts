@@ -7,6 +7,9 @@ import {
   type ToolSet,
   type UIMessage,
 } from "ai";
+import { getAuthCredentials } from "@/lib/auth";
+import { RESUMABLE_STREAM_ID_HEADER } from "assistant-stream/resumable";
+import { mongoResumableStore, resumableContext } from "@/lib/resumable/context";
 import { z } from "zod";
 import { marked } from "marked";
 import htmlToDocx from "html-to-docx";
@@ -23,6 +26,13 @@ import {
   extractMcpMentions,
   type McpToolBundle,
 } from "@/lib/mcp/client";
+
+/**
+ * MCP 写操作工具的名称启发式(命中即要求用户审批后执行)。
+ * 只覆盖明确的变更类动词;get/list/search/read 等查询类放行。
+ */
+const MCP_WRITE_TOOL_RE =
+  /(create|write|update|delete|remove|drop|insert|send|post|patch|rename|move|copy|edit|modify|cancel|submit|publish|deploy|reset|set|add|upload|execute|run|apply|approve|pay|transfer|close|open|start|stop|kill|restart)/i;
 
 /**
  * 从消息列表中提取最后一条用户消息的文本，作为 RAG 检索 query。
@@ -388,6 +398,25 @@ export async function POST(req: Request) {
       generate_spreadsheet: generateSpreadsheetTool,
       generate_presentation: generatePresentationTool,
     } as ToolSet,
+    // HITL:MCP 工具按名称启发式判定写操作(改/删/发/建等),执行前需用户审批;
+    // 内置文档生成等本地工具只产出文件,不触外部系统,无需审批
+    toolApproval: ({ toolCall }) => {
+      const name = toolCall.toolName;
+      if (!name.startsWith("mcp__")) return "not-applicable";
+      return MCP_WRITE_TOOL_RE.test(name)
+        ? {
+            type: "user-approval",
+            reason: "该 MCP 工具可能修改外部数据,请确认是否执行",
+          }
+        : "not-applicable";
+    },
+    // HMAC 签名防伪造审批(与 auth 同源派生,可用 TOOL_APPROVAL_SECRET 覆盖)
+    experimental_toolApprovalSecret:
+      process.env.TOOL_APPROVAL_SECRET ??
+      (() => {
+        const { username, password } = getAuthCredentials();
+        return `tool-approval:${username}:${password}`;
+      })(),
     ...(reasoningOptions.providerOptions
       ? { providerOptions: reasoningOptions.providerOptions }
       : {}),
@@ -398,8 +427,23 @@ export async function POST(req: Request) {
     .then(() => mcpBundle.close())
     .catch(() => undefined);
 
-  return result.toUIMessageStreamResponse({
+  // 可恢复流:首个请求成为 producer,字节落 Mongo;断线/刷新后经
+  // GET /api/chat/resume/<streamId> 作为 consumer 重放。属主绑定 userId。
+  const streamId = crypto.randomUUID();
+  const source = result.toUIMessageStreamResponse({
     onError: (error) =>
       error instanceof Error ? error.message : String(error),
+  });
+  const body = await resumableContext.run(streamId, () => source.body!);
+  // 属主绑定(resume 时校验,防跨用户重放;失败仅意味着过早 resume 会 404)
+  void mongoResumableStore.setOwner(streamId, normalizedUserId).catch(
+    () => undefined,
+  );
+  return new Response(body, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      [RESUMABLE_STREAM_ID_HEADER]: streamId,
+      "x-accel-buffering": "no",
+    },
   });
 }

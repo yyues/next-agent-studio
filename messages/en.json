@@ -29,6 +29,8 @@
     "stopGenerating": "Stop generating",
     "copy": "Copy",
     "refresh": "Refresh",
+    "feedbackPositive": "Good response",
+    "feedbackNegative": "Bad response",
     "editMessage": "Edit",
     "cancel": "Cancel",
     "updateMessage": "Update",
@@ -67,7 +69,8 @@
     "genDocGenerating": "Generating document",
     "genDocPreview": "Preview",
     "genDocDownload": "Download",
-    "genDocTitle": "AI-generated document"
+    "genDocTitle": "AI-generated document",
+    "sendSuggestion": "Send"
   },
   "settings": {
     "title": "Model Providers",
@@ -174,7 +177,9 @@
     "noCustomRolesHint": "Create a custom role with its own prompt, skills and knowledge",
     "missingFields": "Role ID and display name are required.",
     "saving": "Saving…",
-    "loadFailed": "Failed to load roles."
+    "loadFailed": "Failed to load roles.",
+    "suggestions": "Starter suggestions",
+    "suggestionsPlaceholder": "One question per line, shown on the new-chat welcome screen (max 6)"
   },
   "login": {
     "title": "Welcome back",

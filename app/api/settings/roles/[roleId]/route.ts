@@ -36,6 +36,7 @@ export async function PUT(
       systemPrompt?: string;
       enabled?: boolean;
       priority?: number;
+      suggestions?: string[];
     };
 
     const userId = await getAuthUserId(req, payload.userId ?? req.headers.get("x-user-id"));
@@ -45,6 +46,7 @@ export async function PUT(
       systemPrompt: payload.systemPrompt,
       enabled: payload.enabled,
       priority: payload.priority,
+      suggestions: payload.suggestions,
     });
 
     return NextResponse.json({ role });

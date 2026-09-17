@@ -34,6 +34,8 @@ export type RoleProfile = {
   skillIds: string[];
   toolToggles: Record<string, boolean>;
   priority: number;
+  /** 新会话欢迎页的开场建议问题(逐条展示,点击即发送) */
+  suggestions: string[];
 };
 
 const defaultProviderSettings: ProviderSettings = {
@@ -60,6 +62,11 @@ const defaultRoleProfiles: RoleProfile[] = [
     skillIds: ["base"],
     toolToggles: {},
     priority: 0,
+    suggestions: [
+      "帮我总结一段文字或一篇文章",
+      "写一封正式的商务邮件",
+      "给我一个周计划模板",
+    ],
   },
   {
     roleId: "developer",
@@ -71,6 +78,11 @@ const defaultRoleProfiles: RoleProfile[] = [
     skillIds: ["base", "developer"],
     toolToggles: {},
     priority: 1,
+    suggestions: [
+      "帮我 review 一段代码",
+      "解释一个报错信息的可能原因",
+      "把这段伪代码重构成 TypeScript",
+    ],
   },
 ];
 
@@ -130,6 +142,9 @@ function toRoleProfile(doc: Record<string, unknown>): RoleProfile {
       : [],
     toolToggles,
     priority: Number(doc.priority ?? 0),
+    suggestions: Array.isArray(doc.suggestions)
+      ? (doc.suggestions as unknown[]).map((v) => String(v)).filter(Boolean)
+      : [],
   };
 }
 
@@ -516,22 +531,27 @@ export async function testProviderSettings(payload: Partial<ProviderSettings>) {
  */
 async function seedDefaultRoles(userId: string) {
   for (const role of defaultRoleProfiles) {
+    // pipeline upsert:插入时写全量;已存在时各字段仅在缺失($ifNull)时回填,
+    // 兼容旧文档升级(如 suggestions),用户显式改过的值不会被覆盖
     await RoleProfileModel.findOneAndUpdate(
       { userId, roleId: role.roleId },
-      {
-    $setOnInsert: {
-          userId,
-          roleId: role.roleId,
-          displayName: role.displayName,
-          description: role.description,
-          enabled: role.enabled,
-          systemPrompt: role.systemPrompt,
-          skillIds: role.skillIds,
-          toolToggles: role.toolToggles,
-          priority: role.priority,
+      [
+        {
+          $set: {
+            userId: { $ifNull: ["$userId", userId] },
+            roleId: { $ifNull: ["$roleId", role.roleId] },
+            displayName: { $ifNull: ["$displayName", role.displayName] },
+            description: { $ifNull: ["$description", role.description] },
+            enabled: { $ifNull: ["$enabled", role.enabled] },
+            systemPrompt: { $ifNull: ["$systemPrompt", role.systemPrompt] },
+            skillIds: { $ifNull: ["$skillIds", role.skillIds] },
+            toolToggles: { $ifNull: ["$toolToggles", role.toolToggles] },
+            priority: { $ifNull: ["$priority", role.priority] },
+            suggestions: { $ifNull: ["$suggestions", role.suggestions] },
+          },
         },
-      },
-      { upsert: true },
+      ],
+      { upsert: true, updatePipeline: true },
     );
   }
 }
@@ -712,6 +732,7 @@ export async function createRole(
     description?: string;
     enabled?: boolean;
     priority?: number;
+    suggestions?: string[];
   },
 ) {
   if (isBuiltinRole(payload.roleId)) {
@@ -738,6 +759,7 @@ export async function createRole(
     skillIds: ["base"],
     toolToggles: {},
     priority: payload.priority ?? 10,
+    suggestions: (payload.suggestions ?? []).map((v) => v.trim()).filter(Boolean),
   });
 
   // 创建角色对应的 skill 目录
@@ -755,6 +777,7 @@ export async function updateRole(
     systemPrompt: string;
     enabled: boolean;
     priority: number;
+    suggestions: string[];
   }>,
 ) {
   if (isBuiltinRole(roleId)) {
@@ -772,6 +795,11 @@ export async function updateRole(
     update.systemPrompt = payload.systemPrompt;
   if (payload.enabled !== undefined) update.enabled = payload.enabled;
   if (payload.priority !== undefined) update.priority = payload.priority;
+  if (payload.suggestions !== undefined)
+    update.suggestions = payload.suggestions
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 6);
 
   const doc = await RoleProfileModel.findOneAndUpdate(
     { userId, roleId },

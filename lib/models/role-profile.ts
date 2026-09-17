@@ -11,6 +11,8 @@ const roleProfileSchema = new Schema(
     skillIds: { type: [String], required: true, default: [] },
     toolToggles: { type: Map, of: Boolean, default: {} },
     priority: { type: Number, required: true, default: 0 },
+    /** 新会话开场建议问题 */
+    suggestions: { type: [String], default: [] },
   },
   {
     timestamps: true,

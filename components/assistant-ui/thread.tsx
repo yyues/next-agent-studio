@@ -3,7 +3,7 @@ import {
   ComposerAttachments,
   UserMessageAttachments,
 } from "@/components/assistant-ui/attachment";
-import { MarkdownText } from "@/components/assistant-ui/markdown-text";
+import { StreamdownText } from "@/components/assistant-ui/streamdown-text";
 import { ToolFallback } from "@/components/assistant-ui/tool-fallback";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { ConversationTimeline } from "@/components/assistant-ui/conversation-timeline";
@@ -14,11 +14,13 @@ import { GenerateDocumentResult } from "@/components/assistant-ui/generate-docum
 import { slashDirectiveFormatter } from "@/lib/slash-directive";
 import { LexicalComposerInput } from "@assistant-ui/react-lexical";
 import { ChipSpacingPlugin } from "@/components/assistant-ui/chip-spacing-plugin";
+import { useLexicalComposerInputHistory } from "@/components/assistant-ui/composer-input-history";
 import { DeepThinkingToggle } from "@/components/assistant-ui/deep-thinking-toggle";
 import { McpPicker } from "@/components/assistant-ui/mcp-picker";
 import { ThinkingIndicator } from "@/components/thinking-indicator";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { getClientRuntimeContext } from "@/lib/client-runtime-context";
 import {
   ActionBarMorePrimitive,
   ActionBarPrimitive,
@@ -28,8 +30,8 @@ import {
   ComposerPrimitive,
   ErrorPrimitive,
   MessagePrimitive,
-  SuggestionPrimitive,
   ThreadPrimitive,
+  useAui,
   useAuiState,
 } from "@assistant-ui/react";
 import {
@@ -46,6 +48,8 @@ import {
   RefreshCwIcon,
   SparklesIcon,
   SquareIcon,
+  ThumbsDownIcon,
+  ThumbsUpIcon,
 } from "lucide-react";
 import { type FC, useEffect, useState } from "react";
 
@@ -195,34 +199,64 @@ const ThreadWelcome: FC = () => {
   );
 };
 
+/**
+ * 开场建议问题:按当前角色从 /api/settings/roles 拉取(角色详情里可编辑),
+ * 点击即作为用户消息发送。仅在新会话且输入框为空时展示。
+ */
 const ThreadSuggestions: FC = () => {
+  const t = useTranslations("thread");
+  const aui = useAui();
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const roleId = getClientRuntimeContext().roleId;
+    const userId = getClientRuntimeContext().userId;
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/settings/roles/${encodeURIComponent(roleId)}?userId=${encodeURIComponent(userId)}`,
+        );
+        if (!res.ok) return;
+        const data = (await res.json()) as { role?: { suggestions?: string[] } };
+        if (!cancelled) setSuggestions(data.role?.suggestions ?? []);
+      } catch {
+        // 建议问题加载失败静默忽略,不影响会话
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (suggestions.length === 0) return null;
+
   return (
     <div className="aui-thread-welcome-suggestions flex w-full flex-wrap items-center justify-center gap-2 px-4">
-      <ThreadPrimitive.Suggestions>
-        {() => <ThreadSuggestionItem />}
-      </ThreadPrimitive.Suggestions>
-    </div>
-  );
-};
-
-const ThreadSuggestionItem: FC = () => {
-  return (
-    <div className="aui-thread-welcome-suggestion-display fade-in slide-in-from-bottom-2 animate-in fill-mode-both duration-200">
-      <SuggestionPrimitive.Trigger send asChild>
+      {suggestions.map((text) => (
         <Button
+          key={text}
           variant="ghost"
-          className="aui-thread-welcome-suggestion aui-lift text-foreground hover:bg-muted hover:shadow-md border-border/60 h-auto gap-1.5 rounded-full border px-3.5 py-1.5 text-sm font-normal whitespace-nowrap active:scale-[0.98] motion-reduce:transition-none"
+          className="aui-thread-welcome-suggestion aui-lift text-foreground hover:bg-muted hover:shadow-md border-border/60 fade-in slide-in-from-bottom-2 animate-in h-auto gap-1.5 rounded-full border px-3.5 py-1.5 text-sm font-normal whitespace-nowrap fill-mode-both duration-200 active:scale-[0.98] motion-reduce:transition-none"
+          title={t("sendSuggestion")}
+          onClick={() =>
+            aui.thread.append({
+              role: "user",
+              content: [{ type: "text", text }],
+            })
+          }
         >
-          <SuggestionPrimitive.Title className="aui-thread-welcome-suggestion-text-1" />
-          <SuggestionPrimitive.Description className="aui-thread-welcome-suggestion-text-2 empty:hidden" />
+          {text}
         </Button>
-      </SuggestionPrimitive.Trigger>
+      ))}
     </div>
   );
 };
 
 const Composer: FC = () => {
   const t = useTranslations("thread");
+  // 输入历史:空输入框 ↑ 召回已发送消息(Lexical 垫片适配官方 hook)
+  const inputHistory = useLexicalComposerInputHistory();
   return (
     <ComposerPrimitive.Unstable_TriggerPopoverRoot>
       <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
@@ -242,6 +276,7 @@ const Composer: FC = () => {
               aria-label="Message input"
               formatter={slashDirectiveFormatter}
               directiveChip={LexicalSlashChip}
+              onKeyDown={inputHistory.onKeyDown}
             >
               {/* chip 插入末尾时补尾随空格,光标不贴边 */}
               <ChipSpacingPlugin />
@@ -426,7 +461,7 @@ const AssistantMessage: FC = () => {
           {({ part }) => {
             if (part.type === "reasoning")
               return <ReasoningBlock text={part.text} />;
-            if (part.type === "text") return <MarkdownText />;
+            if (part.type === "text") return <StreamdownText />;
             if (part.type === "tool-call") {
               // 文件生成工具族:专用渲染器(生成中/完成的文档 tile + 预览/下载)
               if (
@@ -498,6 +533,29 @@ const AssistantActionBar: FC = () => {
           <RefreshCwIcon />
         </TooltipIconButton>
       </ActionBarPrimitive.Reload>
+      {/* 消息反馈:提交后图标高亮(data-submitted) */}
+      <ActionBarPrimitive.FeedbackPositive
+        asChild
+        aria-label={t("feedbackPositive")}
+      >
+        <TooltipIconButton
+          tooltip={t("feedbackPositive")}
+          className="data-[submitted=true]:text-primary"
+        >
+          <ThumbsUpIcon className="size-4" />
+        </TooltipIconButton>
+      </ActionBarPrimitive.FeedbackPositive>
+      <ActionBarPrimitive.FeedbackNegative
+        asChild
+        aria-label={t("feedbackNegative")}
+      >
+        <TooltipIconButton
+          tooltip={t("feedbackNegative")}
+          className="data-[submitted=true]:text-destructive"
+        >
+          <ThumbsDownIcon className="size-4" />
+        </TooltipIconButton>
+      </ActionBarPrimitive.FeedbackNegative>
       <ActionBarMorePrimitive.Root>
         <ActionBarMorePrimitive.Trigger asChild>
           <TooltipIconButton

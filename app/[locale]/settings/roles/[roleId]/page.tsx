@@ -60,6 +60,7 @@ type RoleDetail = {
     systemPrompt: string;
     skillIds: string[];
     priority: number;
+    suggestions: string[];
   };
   skills: SkillInfo[];
   resources: ResourceInfo[];
@@ -94,6 +95,7 @@ export default function RoleDetailPage() {
   const [systemPrompt, setSystemPrompt] = useState("");
   const [enabled, setEnabled] = useState(true);
   const [priority, setPriority] = useState(0);
+  const [suggestions, setSuggestions] = useState("");
 
   /* delete dialog */
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -134,6 +136,7 @@ export default function RoleDetailPage() {
       setSystemPrompt(data.role.systemPrompt);
       setEnabled(data.role.enabled);
       setPriority(data.role.priority);
+      setSuggestions((data.role.suggestions ?? []).join("\n"));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unknown error");
     } finally {
@@ -556,6 +559,25 @@ export default function RoleDetailPage() {
                 className="bg-background border-input min-h-32 rounded-md border px-2.5 py-2 text-sm outline-none disabled:opacity-50"
                 placeholder={t("systemPromptPlaceholder")}
                 rows={6}
+              />
+            </label>
+            <label className="grid gap-1.5">
+              <span className="text-xs text-muted-foreground">
+                {t("suggestions")}
+              </span>
+              <textarea
+                value={suggestions}
+                autoComplete="off"
+                onChange={(e) => {
+                  setSuggestions(e.target.value);
+                  scheduleSave({
+                    suggestions: e.target.value.split("\n"),
+                  });
+                }}
+                disabled={isBuiltin}
+                className="bg-background border-input min-h-20 rounded-md border px-2.5 py-2 text-sm outline-none disabled:opacity-50"
+                placeholder={t("suggestionsPlaceholder")}
+                rows={4}
               />
             </label>
             <div className="grid grid-cols-2 gap-4">
