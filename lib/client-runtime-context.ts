@@ -55,8 +55,11 @@ export function setClientRuntimeContext(input: Partial<ClientRuntimeContext>) {
 
   const current = getClientRuntimeContext();
   const next = normalizeContext({ ...current, ...input });
+  // 角色切换时清空 MCP 勾选:serverId 属于旧角色,对新角色无意义
+  // (不清空会把旧角色的 id 发给服务端,导致新角色 MCP 工具被过滤为空)
+  if (next.roleId !== current.roleId) next.mcpServerIds = undefined;
 
-  // 无变化时不写入、不派发事件，避免订阅者自触发循环（如 RoleSwitcher 拉取后写回 roleId）
+  // 无变化时不写入、不派发事件,避免订阅者自触发循环(如 RoleSwitcher 拉取后写回 roleId)
   if (
     next.userId === current.userId &&
     next.roleId === current.roleId &&

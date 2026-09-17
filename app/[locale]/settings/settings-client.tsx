@@ -7,27 +7,39 @@ import { useRouter } from "@/i18n/navigation";
 import { ArrowLeftIcon, BotIcon, CpuIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ProvidersPanel } from "@/components/settings/providers-panel";
-import { RolesPanel } from "@/components/settings/roles-panel";
+import { RolesWorkspace } from "@/components/settings/roles-workspace";
 
 type SettingsTab = "providers" | "roles";
 
+const LAST_TAB_KEY = "settings-last-tab";
+
+function resolveInitialTab(urlTab: string | null): SettingsTab {
+  if (urlTab === "roles" || urlTab === "providers") return urlTab;
+  // URL 未指定时用上次访问的标签(齿轮直达时不丢上下文)
+  if (typeof window !== "undefined") {
+    const saved = window.localStorage.getItem(LAST_TAB_KEY);
+    if (saved === "roles" || saved === "providers") return saved;
+  }
+  return "providers";
+}
+
 /**
  * 统一设置页壳:毛玻璃顶栏(返回对话 + 品牌) → 页头 → 分段式标签页。
- * 标签状态同步到 URL ?tab=(可深链/刷新保持),切换时面板 remount 触发入场动画。
- * 供应商与角色两个模块共用此壳,内容面板各自管理数据与弹窗。
+ * 标签状态同步到 URL ?tab=(可深链/刷新保持)并记忆上次访问;
+ * 供应商标签为单列卡片,角色标签为双栏工作区(列表 + 详情)。
  */
 export const SettingsClient: FC<{ appTitle: string }> = ({ appTitle }) => {
   const t = useTranslations("settings");
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const initialTab =
-    searchParams.get("tab") === "roles" ? "roles" : "providers";
-  const [tab, setTab] = useState<SettingsTab>(initialTab);
+  const urlTab = searchParams.get("tab");
+  const [tab, setTab] = useState<SettingsTab>(resolveInitialTab(urlTab));
 
   const switchTab = (next: SettingsTab) => {
     if (next === tab) return;
     setTab(next);
+    window.localStorage.setItem(LAST_TAB_KEY, next);
     // replace 不产生历史记录,保持返回键行为可预测
     router.replace(`/settings?tab=${next}`, { scroll: false });
   };
@@ -36,7 +48,7 @@ export const SettingsClient: FC<{ appTitle: string }> = ({ appTitle }) => {
     <div className="from-primary/5 via-background to-background min-h-dvh bg-gradient-to-b">
       {/* 顶栏 */}
       <header className="bg-background/70 border-border/50 sticky top-0 z-20 border-b backdrop-blur-md">
-        <div className="mx-auto flex h-12 max-w-2xl items-center gap-2 px-4">
+        <div className="mx-auto flex h-12 max-w-4xl items-center gap-2 px-4">
           <button
             type="button"
             onClick={() => router.push("/chat")}
@@ -52,7 +64,12 @@ export const SettingsClient: FC<{ appTitle: string }> = ({ appTitle }) => {
         </div>
       </header>
 
-      <main className="mx-auto max-w-2xl px-4 pb-16">
+      <main
+        className={cn(
+          "mx-auto px-4 pb-16",
+          tab === "roles" ? "max-w-4xl" : "max-w-2xl",
+        )}
+      >
         {/* 页头 */}
         <div className="mt-10">
           <h1 className="text-2xl font-semibold tracking-tight">
@@ -104,9 +121,13 @@ export const SettingsClient: FC<{ appTitle: string }> = ({ appTitle }) => {
           })}
         </div>
 
-        {/* 面板:key 变化 remount → 入场动画 */}
+        {/* 面板:key 变化 remount → 入场动画;角色为双栏工作区 */}
         <div key={tab} className="aui-anim-item">
-          {tab === "roles" ? <RolesPanel /> : <ProvidersPanel />}
+          {tab === "roles" ? (
+            <RolesWorkspace initialRoleId={searchParams.get("role") ?? undefined} />
+          ) : (
+            <ProvidersPanel />
+          )}
         </div>
       </main>
     </div>

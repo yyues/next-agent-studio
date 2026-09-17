@@ -29,8 +29,9 @@ export const McpPicker: FC = () => {
   const [selected, setSelected] = useState<string[] | undefined>(undefined);
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
-
-  const roleId = getClientRuntimeContext().roleId;
+  // 订阅上下文更新:对话内切换角色后重新加载新角色的 server 列表
+  // (渲染期快照读 context 不会随切换重渲染)
+  const [roleId, setRoleId] = useState(() => getClientRuntimeContext().roleId);
 
   const loadServers = useCallback(async (currentRoleId: string) => {
     try {
@@ -48,12 +49,14 @@ export const McpPicker: FC = () => {
 
   useEffect(() => {
     void loadServers(roleId);
-    setSelected(getClientRuntimeContext().mcpServerIds);
   }, [roleId, loadServers]);
 
   useEffect(() => {
-    const onUpdate = () =>
-      setSelected(getClientRuntimeContext().mcpServerIds);
+    const onUpdate = () => {
+      const ctx = getClientRuntimeContext();
+      setRoleId(ctx.roleId);
+      setSelected(ctx.mcpServerIds);
+    };
     window.addEventListener(RUNTIME_CONTEXT_UPDATED_EVENT, onUpdate);
     return () =>
       window.removeEventListener(RUNTIME_CONTEXT_UPDATED_EVENT, onUpdate);

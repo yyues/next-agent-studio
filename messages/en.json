@@ -183,7 +183,8 @@
     "duplicateContent": "An identical file already exists — no need to upload again",
     "overwriteTitle": "Overwrite confirmation",
     "overwriteConfirm": "\"{name}\" already exists. Overwrite it? The old content will be replaced.",
-    "overwriteAction": "Overwrite"
+    "overwriteAction": "Overwrite",
+    "selectRoleHint": "Select a role on the left to view and edit"
   },
   "login": {
     "title": "Welcome back",

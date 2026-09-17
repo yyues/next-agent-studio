@@ -183,7 +183,8 @@
     "duplicateContent": "内容完全相同的文件已存在,无需重复上传",
     "overwriteTitle": "覆盖确认",
     "overwriteConfirm": "已存在同名条目「{name}」。是否覆盖上传?旧内容将被替换。",
-    "overwriteAction": "覆盖上传"
+    "overwriteAction": "覆盖上传",
+    "selectRoleHint": "从左侧选择一个角色查看和编辑"
   },
   "login": {
     "title": "欢迎回来",
