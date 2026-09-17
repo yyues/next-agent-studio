@@ -340,8 +340,9 @@ export async function POST(req: Request) {
     serverSummaries: [],
     close: async () => undefined,
   };
-  try {
-    mcpBundle = await loadMcpToolsForChat({
+  // MCP 连接与 RAG 检索互不依赖,并行执行省一段串行等待
+  const [mcpLoaded, ragContext] = await Promise.all([
+    loadMcpToolsForChat({
       userId: normalizedUserId,
       roleId: runtimeConfig.role.roleId,
       enabledServerIds: Array.isArray(mcpServerIds)
@@ -351,10 +352,18 @@ export async function POST(req: Request) {
         ...extractMcpMentions(lastUserQuery),
         ...commandTokens,
       ],
-    });
-  } catch (error) {
-    console.warn("[chat] MCP tools load failed:", error);
-  }
+    }).catch((error) => {
+      // 单个 server 连接失败自动跳过,不阻断对话
+      console.warn("[chat] MCP tools load failed:", error);
+      return undefined;
+    }),
+    getRagContext(
+      runtimeConfig.role.roleId,
+      lastUserQuery,
+      runtimeConfig.provider,
+    ),
+  ]);
+  if (mcpLoaded) mcpBundle = mcpLoaded;
 
   const mcpPromptSection =
     mcpBundle.serverSummaries.length > 0
@@ -367,12 +376,6 @@ export async function POST(req: Request) {
           "用户在消息中用 @server名称 指定某个 MCP 时,优先使用该 server 的工具。",
         ].join("\n")
       : "";
-
-  const ragContext = await getRagContext(
-    runtimeConfig.role.roleId,
-    lastUserQuery,
-    runtimeConfig.provider,
-  );
 
   const mergedSystemPrompt = [
     runtimeConfig.systemPrompt,
@@ -427,19 +430,25 @@ export async function POST(req: Request) {
     .then(() => mcpBundle.close())
     .catch(() => undefined);
 
-  // 可恢复流:首个请求成为 producer,字节落 Mongo;断线/刷新后经
-  // GET /api/chat/resume/<streamId> 作为 consumer 重放。属主绑定 userId。
+  // 可恢复流:live 分支直发客户端——Mongo 版 store 的 append 每 chunk 两次
+  // 库往返、read 为 500ms 轮询,若响应走 store 会让流式慢一个数量级;
+  // backup 分支由后台 producer 落库,仅供断线/刷新后 resume 重放。
   const streamId = crypto.randomUUID();
   const source = result.toUIMessageStreamResponse({
     onError: (error) =>
       error instanceof Error ? error.message : String(error),
   });
-  const body = await resumableContext.run(streamId, () => source.body!);
-  // 属主绑定(resume 时校验,防跨用户重放;失败仅意味着过早 resume 会 404)
-  void mongoResumableStore.setOwner(streamId, normalizedUserId).catch(
-    () => undefined,
-  );
-  return new Response(body, {
+  const [liveBody, backupBody] = source.body!.tee();
+  void resumableContext
+    .run(streamId, () => backupBody)
+    .then(async (consumer) => {
+      // 客户端消费的是 live 分支,consumer 无人读,立即关停其轮询;
+      // 此刻 acquire 已完成,再绑属主不会因 meta 未建而丢失
+      await consumer.cancel();
+      await mongoResumableStore.setOwner(streamId, normalizedUserId);
+    })
+    .catch(() => undefined);
+  return new Response(liveBody, {
     headers: {
       "Content-Type": "text/event-stream",
       [RESUMABLE_STREAM_ID_HEADER]: streamId,

@@ -23,7 +23,7 @@ import {
   type UIMessage,
 } from "ai";
 import { useCallback, useMemo, type FC, type ReactNode, useRef } from "react";
-import { getClientRuntimeContext } from "@/lib/client-runtime-context";
+import { getClientRuntimeContext, setClientRuntimeContext } from "@/lib/client-runtime-context";
 import { CONVERSATION_SAVED_EVENT } from "@/lib/conversation-events";
 
 type ConversationSummary = {
@@ -58,16 +58,22 @@ const useThreadAdapters = () => {
             const { remoteId } = aui.threadListItem.getState();
             if (!remoteId) return { messages: [] };
             let stored: UIMessage[] = [];
+            let storedRoleId: string | undefined;
             try {
               const res = await fetch(
                 `/api/conversations/${encodeURIComponent(remoteId)}?userId=${encodeURIComponent(userId())}`,
               );
               if (res.ok) {
-                const data = (await res.json()) as { messages?: UIMessage[] };
+                const data = (await res.json()) as { messages?: UIMessage[]; roleId?: string };
                 stored = data.messages ?? [];
+                storedRoleId = data.roleId;
               }
             } catch {
               stored = [];
+            }
+            // 会话记录带有角色 → 切换回该会话时恢复其角色(当前会话内切换只影响后续消息)
+            if (storedRoleId && storedRoleId !== getClientRuntimeContext().roleId) {
+              setClientRuntimeContext({ roleId: storedRoleId });
             }
             let parentId: string | null = null;
             const messages = stored.map((m) => {
@@ -181,8 +187,6 @@ const createConversationAdapter = (): RemoteThreadListAdapter => ({
 type AssistantProps = {
   /** 当前会话 id(来自路由),作为受控 threadId 同步 URL 与运行时 */
   conversationId: string;
-  /** 当前角色 id(来自 URL),缺省回退到运行时上下文 */
-  roleId?: string;
   /** 运行时切换线程时回调(如同步到路由) */
   onThreadIdChange?: (threadId: string) => void;
   children: ReactNode;
@@ -194,18 +198,16 @@ type AssistantProps = {
  * - 历史消息由 adapter 的 unstable_useAdapters(history)在线程挂载时按 remoteId 加载,
  *   Provider 全程保持挂载,切换会话只重渲染会话内容区
  * - 线程切换时 onThreadIdChange 上抛,父组件负责同步路由
+ * - 角色取自运行时上下文(实时读取):当前会话内切换角色后,后续消息即用新角色
  */
 export const Assistant: FC<AssistantProps> = ({
   conversationId,
-  roleId,
   onThreadIdChange,
   children,
 }) => {
   // 当前线程 id:仅取挂载时路由 prop 作初值,之后由线程切换回调维护。
   // (URL 同步走原生 history,page 不会重新取参,渲染期回写会把 ref 重置成旧值)
   const activeIdRef = useRef(conversationId);
-  const roleIdRef = useRef(roleId);
-  roleIdRef.current = roleId;
 
   const runtimeHook = useCallback(
     () => {
@@ -247,7 +249,7 @@ export const Assistant: FC<AssistantProps> = ({
                   userId: context.userId,
                   conversationId: currentConversationId(),
                   messageId: message.id,
-                  roleId: roleIdRef.current ?? context.roleId,
+                  roleId: context.roleId,
                   type,
                   snapshot,
                 }),
@@ -265,7 +267,7 @@ export const Assistant: FC<AssistantProps> = ({
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 userId: context.userId,
-                roleId: roleIdRef.current ?? context.roleId,
+                roleId: context.roleId,
                 messages,
               }),
             },
@@ -297,7 +299,7 @@ export const Assistant: FC<AssistantProps> = ({
             const context = getClientRuntimeContext();
             return {
               userId: context.userId,
-              roleId: roleIdRef.current ?? context.roleId,
+              roleId: context.roleId,
               conversationId: currentConversationId(),
               deepThinking: context.deepThinking === true,
               mcpServerIds: context.mcpServerIds,

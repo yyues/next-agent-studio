@@ -66,9 +66,9 @@ type RoleDetail = {
   resources: ResourceInfo[];
 };
 
-/* ---------- builtin set ---------- */
+/* ---------- builtin set(与 lib/server-settings 的 defaultRoleProfiles 保持一致) ---------- */
 
-const builtinRoleIds = new Set(["general", "developer", "analyst"]);
+const builtinRoleIds = new Set(["general", "developer"]);
 
 /* ---------- page component ---------- */
 
@@ -175,13 +175,12 @@ export default function RoleDetailPage() {
 
   const scheduleSave = useCallback(
     (fields: Record<string, unknown>) => {
-      if (isBuiltin) return;
       if (debounceRef.current) clearTimeout(debounceRef.current);
       debounceRef.current = setTimeout(() => {
         void saveFields(fields);
       }, 800);
     },
-    [isBuiltin, saveFields],
+    [saveFields],
   );
 
   /* ----- handlers ----- */
@@ -508,7 +507,7 @@ export default function RoleDetailPage() {
           <h2 className="mb-4 text-sm font-medium">{t("detail")}</h2>
           {isBuiltin && (
             <p className="text-muted-foreground mb-3 text-xs">
-              {t("builtinNotEditable")}
+              {t("builtinHint")}
             </p>
           )}
           <div className="grid gap-4">
@@ -523,7 +522,6 @@ export default function RoleDetailPage() {
                   setDisplayName(e.target.value);
                   scheduleSave({ displayName: e.target.value });
                 }}
-                disabled={isBuiltin}
                 className="bg-background border-input h-9 rounded-md border px-2.5 text-sm outline-none disabled:opacity-50"
               />
             </label>
@@ -538,7 +536,6 @@ export default function RoleDetailPage() {
                   setDescription(e.target.value);
                   scheduleSave({ description: e.target.value });
                 }}
-                disabled={isBuiltin}
                 className="bg-background border-input min-h-16 rounded-md border px-2.5 py-2 text-sm outline-none disabled:opacity-50"
                 placeholder={t("descriptionPlaceholder")}
                 rows={2}
@@ -555,7 +552,6 @@ export default function RoleDetailPage() {
                   setSystemPrompt(e.target.value);
                   scheduleSave({ systemPrompt: e.target.value });
                 }}
-                disabled={isBuiltin}
                 className="bg-background border-input min-h-32 rounded-md border px-2.5 py-2 text-sm outline-none disabled:opacity-50"
                 placeholder={t("systemPromptPlaceholder")}
                 rows={6}
@@ -574,7 +570,6 @@ export default function RoleDetailPage() {
                     suggestions: e.target.value.split("\n"),
                   });
                 }}
-                disabled={isBuiltin}
                 className="bg-background border-input min-h-20 rounded-md border px-2.5 py-2 text-sm outline-none disabled:opacity-50"
                 placeholder={t("suggestionsPlaceholder")}
                 rows={4}
@@ -593,7 +588,6 @@ export default function RoleDetailPage() {
                     setPriority(v);
                     scheduleSave({ priority: v });
                   }}
-                  disabled={isBuiltin}
                   className="bg-background border-input h-9 rounded-md border px-2.5 text-sm outline-none disabled:opacity-50"
                 />
               </label>
@@ -605,7 +599,6 @@ export default function RoleDetailPage() {
                     setEnabled(e.target.checked);
                     scheduleSave({ enabled: e.target.checked });
                   }}
-                  disabled={isBuiltin}
                   className="size-4"
                 />
                 <span className="text-sm">{t("enabled")}</span>
@@ -618,13 +611,11 @@ export default function RoleDetailPage() {
         <section className="border-border/60 bg-card mb-6 rounded-lg border p-5">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-sm font-medium">{t("skills")}</h2>
-            {!isBuiltin && (
-              <FilePickerButton
-                accept=".zip"
-                onSelect={handleSkillUpload}
-                label={t("uploadSkill")}
-              />
-            )}
+            <FilePickerButton
+              accept=".zip"
+              onSelect={handleSkillUpload}
+              label={t("uploadSkill")}
+            />
           </div>
           {skills.length === 0 ? (
             <p className="text-muted-foreground text-sm">{t("noSkills")}</p>
@@ -650,15 +641,13 @@ export default function RoleDetailPage() {
                       </p>
                     )}
                   </div>
-                  {!isBuiltin && (
-                    <button
-                      type="button"
-                      onClick={() => setDeleteSkillTarget(s)}
-                      className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 inline-flex size-6 shrink-0 items-center justify-center rounded transition-colors"
-                    >
-                      <Trash2Icon className="size-3" />
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => setDeleteSkillTarget(s)}
+                    className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 inline-flex size-6 shrink-0 items-center justify-center rounded transition-colors"
+                  >
+                    <Trash2Icon className="size-3" />
+                  </button>
                 </div>
               ))}
             </div>
@@ -669,13 +658,11 @@ export default function RoleDetailPage() {
         <section className="border-border/60 bg-card rounded-lg border p-5">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-sm font-medium">{t("resources")}</h2>
-            {!isBuiltin && (
-              <FilePickerButton
-                accept=".zip"
-                onSelect={handleResourceUpload}
-                label={t("uploadResource")}
-              />
-            )}
+            <FilePickerButton
+              accept=".zip"
+              onSelect={handleResourceUpload}
+              label={t("uploadResource")}
+            />
           </div>
           {resources.length === 0 ? (
             <p className="text-muted-foreground text-sm">{t("noResources")}</p>
@@ -694,15 +681,13 @@ export default function RoleDetailPage() {
                       </p>
                     )}
                   </div>
-                  {!isBuiltin && (
-                    <button
-                      type="button"
-                      onClick={() => setDeleteResourceTarget(r)}
-                      className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 inline-flex size-6 shrink-0 items-center justify-center rounded transition-colors"
-                    >
-                      <Trash2Icon className="size-3" />
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => setDeleteResourceTarget(r)}
+                    className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 inline-flex size-6 shrink-0 items-center justify-center rounded transition-colors"
+                  >
+                    <Trash2Icon className="size-3" />
+                  </button>
                 </div>
               ))}
             </div>

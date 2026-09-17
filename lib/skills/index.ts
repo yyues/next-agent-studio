@@ -25,23 +25,6 @@ import { blobGetText, blobListPathnames, blobDel } from "@/lib/blob";
 const SKILLS_ROOT = resolve(process.cwd(), "skills");
 
 /**
- * 确保角色的 skill 目录存在（文件系统内置 skill 用）。
- * 在只读文件系统（Vercel 生产）上静默跳过：上传 skill 走 Blob，无需本地目录。
- */
-export function ensureRoleSkillDir(roleId: string): string {
-  const dir = join(SKILLS_ROOT, roleId);
-  if (!existsSync(dir)) {
-    try {
-      const { mkdirSync } = require("fs");
-      mkdirSync(dir, { recursive: true });
-    } catch {
-      // 只读文件系统上无法创建目录，静默跳过
-    }
-  }
-  return dir;
-}
-
-/**
  * 删除角色的所有上传 skill：清理 Vercel Blob + MongoDB 记录。
  * 内置 skill（仓库提交）不在 Blob/DB 中，不受影响。
  */

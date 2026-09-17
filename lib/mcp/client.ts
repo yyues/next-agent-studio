@@ -7,6 +7,7 @@ import {
   toMcpServerConfig,
   type McpServerConfig,
 } from "@/lib/models/mcp-server";
+import { encryptSecretMap } from "@/lib/secret-crypto";
 
 const CONNECT_TIMEOUT_MS = 8000;
 
@@ -89,7 +90,8 @@ export async function upsertMcpServer(
       serverId,
       name: payload.name.trim(),
       url: payload.url.trim(),
-      headers,
+      // 请求头值加密落库(幂等:已加密值原样保留)
+      headers: encryptSecretMap(headers),
       enabled: payload.enabled ?? true,
     },
     { new: true, upsert: true, setDefaultsOnInsert: true },

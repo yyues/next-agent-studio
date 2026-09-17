@@ -20,7 +20,8 @@ import {
  */
 
 const TTL_MS = 30 * 60 * 1000;
-const POLL_INTERVAL_MS = 500;
+// 仅作用于 resume 重放(live 响应已直发客户端),取小值让重放更顺滑
+const POLL_INTERVAL_MS = 200;
 const CURSOR_PAD = 12;
 
 const toCursor = (seq: number) => String(seq).padStart(CURSOR_PAD, "0");

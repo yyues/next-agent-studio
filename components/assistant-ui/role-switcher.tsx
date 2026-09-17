@@ -15,14 +15,14 @@ type RoleItem = {
 };
 
 type RoleSwitcherProps = {
-  /** 切换角色后的回调（由对话页触发新建会话） */
+  /** 切换角色后的回调(由对话页同步 URL 查询参数;当前会话继续,后续消息使用新角色) */
   onRoleSwitch?: (roleId: string) => void;
 };
 
 /**
- * 左上角内联角色切换器：用 shadcn Select（原生）显示当前角色并切换。
- * 切换角色 → 通知父组件新建会话（不复用旧会话）。
- * 监听 runtime-context 更新事件，URL 切换角色后同步选中项。
+ * 左上角内联角色切换器:用 shadcn Select(原生)显示当前角色并切换。
+ * 切换角色 → 当前会话继续,后续消息即用新角色(上下文实时读取)。
+ * 监听 runtime-context 更新事件,切回历史会话恢复其角色时同步选中项。
  */
 export const RoleSwitcher: FC<RoleSwitcherProps> = ({ onRoleSwitch }) => {
   const [roles, setRoles] = useState<RoleItem[]>([]);
@@ -77,7 +77,7 @@ export const RoleSwitcher: FC<RoleSwitcherProps> = ({ onRoleSwitch }) => {
     } catch {
       // silently ignore
     }
-    // 通知对话页新建会话（切换角色不复用旧会话）
+    // 通知对话页同步 URL 查询参数(当前会话继续,不新建)
     onRoleSwitch?.(roleId);
   };
 

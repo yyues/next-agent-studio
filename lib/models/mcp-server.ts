@@ -1,4 +1,5 @@
 import { Schema, model, models, type InferSchemaType } from "mongoose";
+import { decryptSecretMap } from "@/lib/secret-crypto";
 
 /**
  * 角色级外部 MCP server 配置(仅远程 URL:Streamable HTTP / SSE)。
@@ -11,7 +12,7 @@ const mcpServerSchema = new Schema(
     serverId: { type: String, required: true },
     name: { type: String, required: true },
     url: { type: String, required: true },
-    // 请求头(如 Authorization),以明文存储,与 ProviderConfig.apiKey 同级敏感度
+    // 请求头(如 Authorization);值以 enc:v1: 密文存储,读出经 toMcpServerConfig 解密
     headers: { type: Map, of: String, default: {} },
     enabled: { type: Boolean, required: true, default: true },
   },
@@ -49,7 +50,7 @@ export function toMcpServerConfig(doc: Record<string, unknown>): McpServerConfig
     serverId: String(doc.serverId),
     name: String(doc.name),
     url: String(doc.url),
-    headers: headers as Record<string, string>,
+    headers: decryptSecretMap(headers as Record<string, string>),
     enabled: Boolean(doc.enabled),
   };
 }

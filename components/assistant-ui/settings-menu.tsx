@@ -7,7 +7,7 @@ import { CpuIcon, SettingsIcon, UserIcon } from "lucide-react";
 import { RoleSwitcher } from "@/components/assistant-ui/role-switcher";
 
 type SettingsMenuProps = {
-  /** 切换角色后的回调（由对话页触发新建会话） */
+  /** 切换角色后的回调(由对话页同步 URL 查询参数;当前会话继续使用新角色) */
   onRoleSwitch?: (roleId: string) => void;
 };
 

@@ -1,5 +1,6 @@
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { generateText } from "ai";
+import mongoose from "mongoose";
 import { connectToMongo } from "@/lib/mongodb";
 import { ProviderConfigModel } from "@/lib/models/provider-config";
 import { ProviderEntryModel } from "@/lib/models/provider-entry";
@@ -8,11 +9,11 @@ import { UserSettingModel } from "@/lib/models/user-setting";
 import { RoleResourceModel } from "@/lib/models/role-resource";
 import {
   loadSkillsByRoleId,
-  ensureRoleSkillDir,
   removeRoleSkillDir,
   getAvailableSkillIds,
 } from "@/lib/skills";
 import { removeRoleResourceDir } from "@/lib/resources";
+import { encryptSecret, decryptSecret } from "@/lib/secret-crypto";
 
 export type ProviderSettings = {
   providerName: string;
@@ -54,34 +55,58 @@ const defaultProviderSettings: ProviderSettings = {
 const defaultRoleProfiles: RoleProfile[] = [
   {
     roleId: "general",
-    displayName: "General Assistant",
-    description: "",
+    displayName: "通用助手",
+    description: "日常问答、写作、翻译、总结与头脑风暴的全能助手",
     enabled: true,
-    systemPrompt:
-      "You are a practical assistant. Keep answers direct and useful.",
+    systemPrompt: `你是一位务实、高效的通用助手。
+
+回答原则:
+- 直接给有用的答案,先结论后展开;不确定就明说,不编造事实。
+- 与用户使用相同的语言交流;术语首次出现时用一句话解释。
+- 内容较长时分点、分节,善用小标题与列表;能给示例就给示例。
+- 涉及文档/报告/表格/演示文稿等产出物时,调用文件生成工具输出为文件,而不是在正文里粘贴长文。
+- 写作类任务先确认目标读者、语气与篇幅;用户没说就按常规商务场景处理。
+- 头脑风暴给足数量并保持差异性,最后附一句推荐倾向。
+- 翻译保留原意与语气,不随意增删内容。
+- 用户的问题有歧义时,先给出最可能的理解并作答,再提示可以补充信息修正方向。`,
     skillIds: ["base"],
     toolToggles: {},
     priority: 0,
     suggestions: [
-      "帮我总结一段文字或一篇文章",
+      "帮我总结一段文字或一篇文章的要点",
       "写一封正式的商务邮件",
-      "给我一个周计划模板",
+      "给我一个一周工作计划模板",
+      "把这段话翻译成英文并润色",
+      "用通俗的语言解释一个专业概念",
+      "头脑风暴:给我 10 个产品命名思路",
     ],
   },
   {
     roleId: "developer",
-    displayName: "Developer",
-    description: "",
+    displayName: "开发工程师",
+    description: "代码评审、排错、重构与技术选型的资深工程师",
     enabled: true,
-    systemPrompt:
-      "You are a senior software engineer. Explain trade-offs and favor safe, maintainable implementations.",
+    systemPrompt: `你是一位资深软件工程师,精通主流编程语言、工程实践与系统设计。
+
+回答原则:
+- 先给结论/方案,再讲依据;讲清权衡(trade-offs),而不是只给一种做法。
+- 代码要安全、可维护:处理边界情况与错误路径,避免引入不必要的依赖。
+- 修改代码时给出完整可运行的代码块,并简述改了什么、为什么;大改动给出关键 diff 说明。
+- 排查报错时按"可能原因 → 排查步骤 → 修复方案"组织,从最可能的原因开始。
+- Review 代码时按严重程度分级指出问题(缺陷/风险/风格),给出具体修改建议。
+- 缺少必要上下文(语言版本、框架、报错日志、目标)时,先提出关键问题,同时给出基于合理假设的初步方案。
+- 技术选型对比给出维度明确的对比表,并基于场景给出明确推荐。
+- 不臆测不存在的 API;对不确定的库行为注明需要验证。`,
     skillIds: ["base", "developer"],
     toolToggles: {},
     priority: 1,
     suggestions: [
-      "帮我 review 一段代码",
+      "帮我 review 一段代码,指出问题与改进建议",
       "解释一个报错信息的可能原因",
       "把这段伪代码重构成 TypeScript",
+      "为这个函数编写单元测试",
+      "对比两种技术方案的优劣并给出选型建议",
+      "帮我写一个正则表达式并解释规则",
     ],
   },
 ];
@@ -214,13 +239,13 @@ export async function getProviderSettings(userId: string) {
     const embeddingModel =
       doc?.embeddingModel || defaultProviderSettings.embeddingModel;
     const embeddingBaseUrl = doc?.embeddingBaseUrl ?? "";
-    const embeddingApiKey = doc?.embeddingApiKey ?? "";
+    const embeddingApiKey = decryptSecret(doc?.embeddingApiKey ?? "");
 
     const config: ProviderSettings = active
       ? {
           providerName: active.providerName || "openai-compatible",
           baseUrl: active.baseUrl,
-          apiKey: active.apiKey,
+          apiKey: decryptSecret(active.apiKey),
           model: active.model,
           embeddingModel,
           embeddingBaseUrl,
@@ -307,13 +332,17 @@ export async function listProviderEntries(userId: string) {
     model: e.model,
     temperature: e.temperature ?? 0.7,
     active: Boolean(e.active),
-    maskedApiKey: maskApiKey(e.apiKey),
+    maskedApiKey: maskApiKey(decryptSecret(e.apiKey)),
   }));
 }
 
 export async function getProviderEntryRaw(userId: string, providerId: string) {
   await connectToMongo();
-  return ProviderEntryModel.findOne({ userId, providerId }).lean();
+  const doc = await ProviderEntryModel.findOne({ userId, providerId }).lean();
+  // apiKey 解密后返回(调用方 test/export 均需明文)
+  return doc
+    ? { ...doc, apiKey: decryptSecret(doc.apiKey) }
+    : doc;
 }
 
 export async function upsertProviderEntry(
@@ -340,8 +369,10 @@ export async function upsertProviderEntry(
     userId,
     providerId,
   }).lean();
-  // apiKey 留空表示沿用旧值;新建时必须提供
-  const apiKey = payload.apiKey?.trim() || existing?.apiKey;
+  // apiKey 留空表示沿用旧值(库中旧值为密文,原样保留);新建时必须提供
+  const apiKey = payload.apiKey?.trim()
+    ? encryptSecret(payload.apiKey.trim())
+    : existing?.apiKey;
   if (!apiKey) throw new Error("apiKey is required.");
 
   const rawTemp = Number(payload.temperature);
@@ -418,8 +449,8 @@ export async function getEmbeddingSettings(userId: string) {
     // 模型内置固定,不开放修改
     model: defaultProviderSettings.embeddingModel,
     baseUrl: doc?.embeddingBaseUrl ?? "",
-    apiKey: doc?.embeddingApiKey ?? "",
-    maskedApiKey: maskApiKey(doc?.embeddingApiKey ?? ""),
+    apiKey: decryptSecret(doc?.embeddingApiKey ?? ""),
+    maskedApiKey: maskApiKey(decryptSecret(doc?.embeddingApiKey ?? "")),
   };
 }
 
@@ -430,9 +461,10 @@ export async function upsertEmbeddingSettings(
   await connectToMongo();
   const existing = await ProviderConfigModel.findOne({ userId }).lean();
   const embeddingBaseUrl = payload.embeddingBaseUrl?.trim() ?? "";
-  // key 留空表示沿用旧值(显式传空串也保留,避免误清空)
-  const embeddingApiKey =
-    payload.embeddingApiKey?.trim() || existing?.embeddingApiKey || "";
+  // key 留空表示沿用旧值(库中旧值为密文,原样保留,避免误清空/重复加密)
+  const embeddingApiKey = payload.embeddingApiKey?.trim()
+    ? encryptSecret(payload.embeddingApiKey.trim())
+    : (existing?.embeddingApiKey ?? "");
 
   await ProviderConfigModel.findOneAndUpdate(
     { userId },
@@ -448,7 +480,7 @@ export async function upsertEmbeddingSettings(
   return {
     model: defaultProviderSettings.embeddingModel,
     baseUrl: embeddingBaseUrl,
-    maskedApiKey: maskApiKey(embeddingApiKey),
+    maskedApiKey: maskApiKey(decryptSecret(embeddingApiKey)),
   };
 }
 
@@ -479,9 +511,15 @@ export async function upsertProviderSettings(
         : existing.config.temperature,
   });
 
+  // normalized 持有明文(供返回掩码);落库时加密 apiKey 字段
   const doc = await ProviderConfigModel.findOneAndUpdate(
     { userId },
-    { ...normalized, userId },
+    {
+      ...normalized,
+      apiKey: encryptSecret(normalized.apiKey),
+      embeddingApiKey: encryptSecret(normalized.embeddingApiKey),
+      userId,
+    },
     { new: true, upsert: true, setDefaultsOnInsert: true },
   ).lean();
 
@@ -489,20 +527,7 @@ export async function upsertProviderSettings(
     throw new Error("Failed to save provider settings.");
   }
 
-  const saved = {
-    providerName: doc.providerName,
-    baseUrl: doc.baseUrl,
-    apiKey: doc.apiKey,
-    model: doc.model,
-    embeddingModel:
-      doc.embeddingModel || defaultProviderSettings.embeddingModel,
-    embeddingBaseUrl: doc.embeddingBaseUrl ?? "",
-    embeddingApiKey: doc.embeddingApiKey ?? "",
-    temperature:
-      typeof doc.temperature === "number"
-        ? doc.temperature
-        : defaultProviderSettings.temperature,
-  };
+  const saved = { ...normalized };
 
   return {
     source: "user" as const,
@@ -626,7 +651,11 @@ export async function resolveRuntimeConfig(input: {
   /** 用户以 /命令 显式调用的技能名(小写);非空时仅注入命中的技能 */
   invokedSkillCommands?: string[];
 }) {
-  const providerFromDb = await getProviderSettings(input.userId);
+  // 两个设置读取互不依赖,并行执行(远程 Mongo 下省一次串行往返)
+  const [providerFromDb, roleSettings] = await Promise.all([
+    getProviderSettings(input.userId),
+    getRoleSettings(input.userId),
+  ]);
   const provider = input.overrideProvider
     ? normalizeProviderInput({
         providerName:
@@ -652,7 +681,6 @@ export async function resolveRuntimeConfig(input: {
       })
     : providerFromDb.config;
 
-  const roleSettings = await getRoleSettings(input.userId);
   const roleId =
     input.requestedRoleId &&
     roleSettings.roles.some(
@@ -726,7 +754,7 @@ export function filterToolsByRole<T extends Record<string, unknown>>(
 export async function createRole(
   userId: string,
   payload: {
-    roleId: string;
+    roleId?: string;
     displayName: string;
     systemPrompt: string;
     description?: string;
@@ -735,15 +763,17 @@ export async function createRole(
     suggestions?: string[];
   },
 ) {
-  if (isBuiltinRole(payload.roleId)) {
+  await connectToMongo();
+
+  // roleId 缺省时直接用 Mongo 自动生成的 ObjectId(全局唯一,URL/Blob 路径安全)
+  const roleId = payload.roleId?.trim() || new mongoose.Types.ObjectId().toString();
+  if (isBuiltinRole(roleId)) {
     throw new Error("Cannot create a role with a built-in roleId.");
   }
 
-  await connectToMongo();
-
   const existing = await RoleProfileModel.findOne({
     userId,
-    roleId: payload.roleId,
+    roleId,
   }).lean();
   if (existing) {
     throw new Error("roleId already exists for this user.");
@@ -751,7 +781,7 @@ export async function createRole(
 
   const doc = await RoleProfileModel.create({
     userId,
-    roleId: payload.roleId,
+    roleId,
     displayName: payload.displayName,
     systemPrompt: payload.systemPrompt,
     description: payload.description ?? "",
@@ -761,9 +791,6 @@ export async function createRole(
     priority: payload.priority ?? 10,
     suggestions: (payload.suggestions ?? []).map((v) => v.trim()).filter(Boolean),
   });
-
-  // 创建角色对应的 skill 目录
-  ensureRoleSkillDir(payload.roleId);
 
   return toRoleProfile(doc.toObject() as Record<string, unknown>);
 }
@@ -780,11 +807,11 @@ export async function updateRole(
     suggestions: string[];
   }>,
 ) {
-  if (isBuiltinRole(roleId)) {
-    throw new Error("Built-in roles cannot be modified.");
-  }
-
   await connectToMongo();
+
+  // 内置角色同样可编辑(按用户维度覆盖);未拉取过角色列表时库中尚无
+  // 播种文档,先补种一份再更新,避免 "Role not found."
+  if (isBuiltinRole(roleId)) await seedDefaultRoles(userId);
 
   const update: Record<string, unknown> = {};
   if (payload.displayName !== undefined)

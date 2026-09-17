@@ -204,9 +204,11 @@ export const ProvidersPanel: FC = () => {
   };
 
   const handleActivate = async (p: ProviderItem) => {
+    if (p.active || busyId) return;
     setBusyId(p.providerId);
+    setMessage(null);
     try {
-      await fetch(
+      const res = await fetch(
         `/api/settings/providers/${encodeURIComponent(p.providerId)}`,
         {
           method: "PATCH",
@@ -214,8 +216,17 @@ export const ProvidersPanel: FC = () => {
           body: JSON.stringify({ userId: userId() }),
         },
       );
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(err.error || t("saveFailed"));
+      }
       await loadProviders();
       setMessage({ type: "success", text: t("activated", { name: p.name }) });
+    } catch (e) {
+      setMessage({
+        type: "error",
+        text: e instanceof Error ? e.message : t("saveFailed"),
+      });
     } finally {
       setBusyId(null);
     }
@@ -398,11 +409,25 @@ export const ProvidersPanel: FC = () => {
               <div
                 key={p.providerId}
                 style={{ animationDelay: `${Math.min(i, 8) * 30}ms` }}
+                role={p.active ? undefined : "button"}
+                tabIndex={p.active ? undefined : 0}
+                aria-label={t("activate") + " " + p.name}
+                onClick={(e) => {
+                  // 底部操作区的按钮(测试/导出/编辑/删除)不触发切换
+                  if ((e.target as HTMLElement).closest("button")) return;
+                  void handleActivate(p);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter" && e.key !== " ") return;
+                  if ((e.target as HTMLElement).closest("button")) return;
+                  e.preventDefault();
+                  void handleActivate(p);
+                }}
                 className={cn(
                   "aui-anim-item aui-lift relative overflow-hidden rounded-xl border px-4 py-3.5",
                   p.active
                     ? "border-primary/40 bg-primary/5"
-                    : "border-border/60 bg-card",
+                    : "hover:border-primary/40 hover:bg-primary/5 border-border/60 bg-card cursor-pointer",
                 )}
               >
                 {/* 激活项左侧色条 */}
@@ -419,16 +444,15 @@ export const ProvidersPanel: FC = () => {
                       </span>
                     </span>
                   ) : (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-7 gap-1 px-2.5 text-xs"
-                      disabled={busyId === p.providerId}
-                      onClick={() => void handleActivate(p)}
-                    >
-                      <ZapIcon className="size-3" />
-                      {t("activate")}
-                    </Button>
+                    busyId !== p.providerId && (
+                      <span className="text-muted-foreground inline-flex items-center gap-1 text-xs">
+                        <ZapIcon className="size-3" />
+                        {t("activate")}
+                      </span>
+                    )
+                  )}
+                  {busyId === p.providerId && (
+                    <Loader2Icon className="text-muted-foreground size-3.5 animate-spin" />
                   )}
                 </div>
                 <p className="text-muted-foreground mt-1.5 truncate font-mono text-xs">

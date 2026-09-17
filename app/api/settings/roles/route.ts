@@ -62,9 +62,6 @@ export async function POST(req: Request) {
       priority?: number;
     };
 
-    if (!payload.roleId?.trim()) {
-      return NextResponse.json({ error: "roleId is required." }, { status: 400 });
-    }
     if (!payload.displayName?.trim()) {
       return NextResponse.json({ error: "displayName is required." }, { status: 400 });
     }
@@ -75,7 +72,8 @@ export async function POST(req: Request) {
     const userId = await getAuthUserId(req, payload.userId ?? req.headers.get("x-user-id"));
     const { createRole } = await import("@/lib/server-settings");
     const role = await createRole(userId, {
-      roleId: payload.roleId.trim(),
+      // roleId 可省略,由数据库计数器自增生成
+      roleId: payload.roleId?.trim() || undefined,
       displayName: payload.displayName.trim(),
       systemPrompt: payload.systemPrompt.trim(),
       enabled: payload.enabled,

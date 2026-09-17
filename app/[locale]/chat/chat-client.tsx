@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState, type FC } from "react";
-import { useRouter } from "@/i18n/navigation";
 import { Assistant } from "../assistant";
 import { Thread } from "@/components/assistant-ui/thread";
 import { SettingsMenu } from "@/components/assistant-ui/settings-menu";
@@ -38,7 +37,6 @@ export const ChatClient: FC<ChatClientProps> = ({
   appTitle = "Agent Studio",
 }) => {
   const t = useTranslations("common");
-  const router = useRouter();
   const { collapsed, toggle } = useSidebarCollapsed();
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
@@ -51,11 +49,12 @@ export const ChatClient: FC<ChatClientProps> = ({
     }
   }, [initialRoleId]);
 
-  // 切换角色 → 新建对话:生成新 chatId,replace 到 /chat/<newId>?roleId=<role>
+  // 切换角色 → 当前会话继续使用新角色:仅更新 URL 查询参数(不新建会话),
+  // 后续消息经运行时上下文实时携带新 roleId
   const handleRoleSwitch = (roleId: string) => {
-    router.replace(
-      `/chat/${crypto.randomUUID()}?roleId=${encodeURIComponent(roleId)}`,
-    );
+    const url = new URL(window.location.href);
+    url.searchParams.set("roleId", roleId);
+    window.history.replaceState(null, "", url);
   };
 
   // 线程切换同步 URL:走原生 history 而非 router.push,
@@ -73,7 +72,6 @@ export const ChatClient: FC<ChatClientProps> = ({
   return (
     <Assistant
       conversationId={chatId}
-      roleId={initialRoleId}
       onThreadIdChange={handleThreadIdChange}
     >
       <div className="bg-background text-foreground flex h-dvh overflow-hidden">

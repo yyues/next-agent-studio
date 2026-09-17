@@ -33,7 +33,6 @@ type RoleItem = {
 };
 
 type RoleForm = {
-  roleId: string;
   displayName: string;
   systemPrompt: string;
   enabled: boolean;
@@ -41,14 +40,13 @@ type RoleForm = {
 };
 
 const emptyForm: RoleForm = {
-  roleId: "",
   displayName: "",
   systemPrompt: "",
   enabled: true,
   priority: 10,
 };
 
-const builtinRoleIds = new Set(["general", "developer", "analyst"]);
+const builtinRoleIds = new Set(["general", "developer"]);
 
 /**
  * 角色面板(统一设置页 /settings 的「角色管理」标签):
@@ -98,7 +96,7 @@ export const RolesPanel: FC = () => {
 
   const handleCreate = async () => {
     if (saving) return;
-    if (!form.roleId.trim() || !form.displayName.trim()) {
+    if (!form.displayName.trim()) {
       setMessage({ type: "error", text: t("missingFields") });
       return;
     }
@@ -110,7 +108,6 @@ export const RolesPanel: FC = () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           userId,
-          roleId: form.roleId,
           displayName: form.displayName,
           systemPrompt: form.systemPrompt,
           enabled: form.enabled,
@@ -121,8 +118,12 @@ export const RolesPanel: FC = () => {
         const err = (await res.json()) as { error?: string };
         throw new Error(err.error || t("saveFailed"));
       }
+      const data = (await res.json()) as { role: { roleId: string } };
       setDialogOpen(false);
-      router.push(`/settings/roles/${encodeURIComponent(form.roleId.trim())}`);
+      // roleId 由数据库自增生成,从响应取回并跳转到详情页
+      router.push(
+        `/settings/roles/${encodeURIComponent(data.role.roleId)}`,
+      );
     } catch (error) {
       setMessage({
         type: "error",
@@ -237,21 +238,6 @@ export const RolesPanel: FC = () => {
             <DialogDescription />
           </DialogHeader>
           <div className="grid gap-3">
-            <label className="grid gap-1.5">
-              <span className="text-foreground text-sm font-medium">
-                {t("roleId")}
-              </span>
-              <input
-                value={form.roleId}
-                autoComplete="off"
-                onChange={(e) =>
-                  setForm((p) => ({ ...p, roleId: e.target.value }))
-                }
-                className="bg-background border-input focus-visible:border-primary focus-visible:ring-primary/30 h-11 rounded-md border px-3 text-sm outline-none transition-colors focus-visible:ring-2"
-                placeholder={t("roleIdPlaceholder")}
-                disabled={saving}
-              />
-            </label>
             <label className="grid gap-1.5">
               <span className="text-foreground text-sm font-medium">
                 {t("displayName")}
