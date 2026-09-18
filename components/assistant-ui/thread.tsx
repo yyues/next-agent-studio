@@ -4,10 +4,11 @@ import {
   UserMessageAttachments,
 } from "@/components/assistant-ui/attachment";
 import { StreamdownText } from "@/components/assistant-ui/streamdown-text";
-import { ToolFallback } from "@/components/assistant-ui/tool-fallback";
+import { ToolFallback, prettyToolName } from "@/components/assistant-ui/tool-fallback";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { ConversationTimeline } from "@/components/assistant-ui/conversation-timeline";
 import { ComposerSlash, LexicalSlashChip } from "@/components/assistant-ui/composer-slash";
+import { ComposerMention } from "@/components/assistant-ui/composer-mention";
 import { UserMessageText } from "@/components/assistant-ui/user-message-text";
 import { AssistantAttachment } from "@/components/assistant-ui/attachment";
 import { GenerateDocumentResult } from "@/components/assistant-ui/generate-document-tool";
@@ -259,8 +260,9 @@ const Composer: FC = () => {
   return (
     <ComposerPrimitive.Unstable_TriggerPopoverRoot>
       <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
-        {/* "/" 命令面板:锚定在输入框上方 */}
+        {/* "/" 命令面板 与 "@" MCP 提及面板:锚定在输入框上方 */}
         <ComposerSlash />
+        <ComposerMention />
         <ComposerPrimitive.AttachmentDropzone asChild>
           <div
             data-slot="aui_composer-shell"
@@ -386,7 +388,7 @@ function useThinkingLabel() {
     const pending = s.message.parts.find(
       (p) => p.type === "tool-call" && p.result === undefined,
     );
-    if (pending?.type === "tool-call") return `调用 ${pending.toolName}`;
+    if (pending?.type === "tool-call") return `调用 ${prettyToolName(pending.toolName)}`;
     const hasText = s.message.parts.some(
       (p) => p.type === "text" && p.text.length > 0,
     );

@@ -124,11 +124,13 @@ export const LexicalSlashChip: FC<{
 }> = ({ directiveType, label }) => (
   <CommandChip
     type={
-      directiveType === "mcp"
-        ? "mcp"
-        : directiveType === "suggestion"
-          ? "suggestion"
-          : "skill"
+      directiveType === "mention"
+        ? "mention"
+        : directiveType === "mcp"
+          ? "mcp"
+          : directiveType === "suggestion"
+            ? "suggestion"
+            : "skill"
     }
     label={label}
     variant="history"

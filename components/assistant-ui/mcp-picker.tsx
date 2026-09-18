@@ -14,6 +14,9 @@ type McpServerItem = {
   serverId: string;
   name: string;
   url: string;
+  type?: "http" | "stdio";
+  command?: string;
+  args?: string[];
   enabled: boolean;
 };
 
@@ -124,6 +127,10 @@ export const McpPicker: FC = () => {
           {servers.map((server) => {
             const checked =
               selected === undefined ? server.enabled : selected.includes(server.serverId);
+            const display =
+              server.type === "stdio"
+                ? [server.command, ...(server.args ?? [])].filter(Boolean).join(" ")
+                : server.url;
             return (
               <label
                 key={server.serverId}
@@ -135,8 +142,13 @@ export const McpPicker: FC = () => {
                   onChange={() => toggle(server.serverId)}
                   className="size-3.5"
                 />
-                <span className="min-w-0 flex-1 truncate" title={server.url}>
+                <span className="min-w-0 flex-1 truncate" title={display}>
                   {server.name}
+                  {server.type === "stdio" && (
+                    <span className="text-muted-foreground ml-1 text-[10px]">
+                      stdio
+                    </span>
+                  )}
                 </span>
               </label>
             );

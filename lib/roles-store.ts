@@ -21,6 +21,8 @@ export type RoleSummary = {
   priority: number;
   /** 新会话开场建议(ThreadSuggestions 直接从缓存读,不再调详情端点) */
   suggestions: string[];
+  /** public=管理员发布的通用角色(所有人可见);列表分组用 */
+  visibility?: "private" | "public";
 };
 
 const ROLES_CACHE_VERSION_KEY = "roles-cache-version";
@@ -38,6 +40,8 @@ type RolesState = {
   applyRoleCreated: (role: RoleSummary) => void;
   applyRoleUpdated: (role: RoleSummary) => void;
   applyRoleDeleted: (roleId: string) => void;
+  /** 登出/切换账号时清空,避免上一账号的角色列表泄露到下一个账号 */
+  reset: () => void;
 };
 
 function sortByPriority(roles: RoleSummary[]) {
@@ -120,6 +124,15 @@ export const useRolesStore = create<RolesState>((set, get) => ({
     set((s) => ({ roles: s.roles.filter((r) => r.roleId !== roleId) }));
     notifyOtherTabs();
   },
+
+  reset: () =>
+    set({
+      roles: [],
+      serverCurrentRoleId: null,
+      fetchedAt: null,
+      loading: false,
+      loadFailed: false,
+    }),
 }));
 
 if (typeof window !== "undefined") {

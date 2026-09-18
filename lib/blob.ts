@@ -46,6 +46,16 @@ export async function blobGetText(pathname: string): Promise<string | null> {
 }
 
 /**
+ * 读取一个 blob 的二进制内容(对象间拷贝用)。不存在返回 null。
+ */
+export async function blobGetBuffer(pathname: string): Promise<Buffer | null> {
+  requireBlobToken();
+  const res = await get(pathname, { access: "public" });
+  if (!res || res.statusCode !== 200 || !res.stream) return null;
+  return Buffer.from(await new Response(res.stream).arrayBuffer());
+}
+
+/**
  * 删除一个或多个 blob(按 pathname 或 url)。
  */
 export async function blobDel(pathnames: string | string[]): Promise<void> {

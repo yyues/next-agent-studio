@@ -7,6 +7,8 @@ import {
   CheckIcon,
   ChevronDownIcon,
   LoaderIcon,
+  PlugZapIcon,
+  SquareArrowOutUpRightIcon,
   XCircleIcon,
 } from "lucide-react";
 import {
@@ -23,12 +25,38 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 
 const ANIMATION_DURATION = 200;
 
 const pressable = "active:scale-[0.98]";
+
+/**
+ * 解析 MCP 工具名:server 侧以 `mcp__serverId__toolName` 前缀暴露
+ * (serverId slug 不含下划线,按 __ 切分安全)。非 MCP 工具返回 null。
+ */
+export function parseMcpToolName(
+  toolName: string,
+): { serverId: string; toolName: string } | null {
+  if (!toolName.startsWith("mcp__")) return null;
+  const rest = toolName.slice("mcp__".length);
+  const idx = rest.indexOf("__");
+  if (idx <= 0) return null;
+  return { serverId: rest.slice(0, idx), toolName: rest.slice(idx + 2) };
+}
+
+/** 工具名美化:MCP 显示 `server / tool`,其余原样 */
+export function prettyToolName(toolName: string): string {
+  const mcp = parseMcpToolName(toolName);
+  return mcp ? `${mcp.serverId} / ${mcp.toolName}` : toolName;
+}
 
 export type ToolFallbackRootProps = Omit<
   React.ComponentProps<typeof Collapsible>,
@@ -139,9 +167,10 @@ function ToolFallbackTrigger({
   const isCancelled =
     status?.type === "incomplete" && status.reason === "cancelled";
   const t = useTranslations("thread");
+  const mcp = parseMcpToolName(toolName);
 
   const Icon = statusIconMap[statusType];
-  const label = isCancelled ? t("cancelledTool") : t("usedTool");
+  const label = isCancelled ? t("cancelledTool") : mcp ? t("mcpToolLabel") : t("usedTool");
 
   return (
     <CollapsibleTrigger
@@ -168,7 +197,15 @@ function ToolFallbackTrigger({
           isRunning && "shimmer motion-reduce:animate-none",
         )}
       >
-        {label}: <b>{toolName}</b>
+        {label}:{" "}
+        {mcp ? (
+          <b className="text-chart-2 dark:text-chart-2 inline-flex items-center gap-1 font-mono">
+            <PlugZapIcon className="size-3 shrink-0" />
+            {mcp.serverId} / {mcp.toolName}
+          </b>
+        ) : (
+          <b>{toolName}</b>
+        )}
       </span>
       <ToolFallbackDuration />
       <ChevronDownIcon
@@ -552,6 +589,121 @@ function ToolFallbackApproval({
   );
 }
 
+/** 结果/参数一键复制,复制成功后图标短暂切换为对勾 */
+function CopyTextButton({ text }: { text: string }) {
+  const t = useTranslations("thread");
+  const [copied, setCopied] = useState(false);
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="text-muted-foreground hover:text-foreground h-7 gap-1 px-2 text-xs"
+      onClick={() => {
+        void navigator.clipboard?.writeText(text).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        });
+      }}
+    >
+      {copied ? <CheckIcon className="size-3" /> : null}
+      {copied ? t("copiedTool") : t("copy")}
+    </Button>
+  );
+}
+
+/**
+ * 工具调用详情弹窗:完整查看该次调用的参数与结果(卡片内折叠区只保留摘要,
+ * 长内容在此滚动阅读/复制)。MCP 工具显示 server / tool 美化名。
+ */
+function ToolDetailDialog({
+  open,
+  onOpenChange,
+  toolName,
+  argsText,
+  result,
+  status,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  toolName: string;
+  argsText?: string;
+  result?: unknown;
+  status?: ToolCallMessagePartStatus;
+}) {
+  const t = useTranslations("thread");
+  const mcp = parseMcpToolName(toolName);
+  const resultText =
+    result === undefined
+      ? null
+      : typeof result === "string"
+        ? result
+        : JSON.stringify(result, null, 2);
+  const error =
+    status?.type === "incomplete" && status.error
+      ? typeof status.error === "string"
+        ? status.error
+        : JSON.stringify(status.error)
+      : null;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-sm">
+            {mcp && (
+              <PlugZapIcon className="text-chart-2 size-4 shrink-0" />
+            )}
+            <span className="font-mono">{prettyToolName(toolName)}</span>
+          </DialogTitle>
+        </DialogHeader>
+        <div className="grid gap-4">
+          {error && (
+            <div>
+              <p className="text-destructive text-xs font-semibold">
+                {t("toolError")}
+              </p>
+              <pre className="bg-destructive/5 border-destructive/20 text-destructive mt-1 max-h-40 overflow-y-auto rounded-md border p-2.5 text-xs whitespace-pre-wrap">
+                {error}
+              </pre>
+            </div>
+          )}
+          {argsText && (
+            <div>
+              <div className="flex items-center justify-between">
+                <p className="text-muted-foreground text-xs font-medium">
+                  {t("toolDetailArgs")}
+                </p>
+                <CopyTextButton text={argsText} />
+              </div>
+              <pre className="bg-muted/50 text-foreground/90 mt-1 max-h-56 overflow-y-auto rounded-md p-2.5 text-xs whitespace-pre-wrap">
+                {argsText}
+              </pre>
+            </div>
+          )}
+          {resultText !== null && (
+            <div>
+              <div className="flex items-center justify-between">
+                <p className="text-muted-foreground text-xs font-medium">
+                  {t("toolDetailResult")}
+                </p>
+                <CopyTextButton text={resultText} />
+              </div>
+              <pre className="bg-muted/50 text-foreground/90 mt-1 max-h-[26rem] overflow-y-auto rounded-md p-2.5 text-xs whitespace-pre-wrap">
+                {resultText}
+              </pre>
+            </div>
+          )}
+          {!argsText && resultText === null && !error && (
+            <p className="text-muted-foreground py-4 text-center text-xs">
+              {t("toolDetailEmpty")}
+            </p>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 const ToolFallbackImpl: ToolCallMessagePartComponent = ({
   toolName,
   argsText,
@@ -563,6 +715,7 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
   approval,
   respondToApproval,
 }) => {
+  const t = useTranslations("thread");
   const isCancelled =
     status?.type === "incomplete" && status.reason === "cancelled";
   const isRequiresAction = status?.type === "requires-action";
@@ -572,6 +725,7 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
   const [open, setOpen] = useState(isRequiresAction);
   const [prevRequiresAction, setPrevRequiresAction] =
     useState(isRequiresAction);
+  const [detailOpen, setDetailOpen] = useState(false);
   if (isRequiresAction !== prevRequiresAction) {
     setPrevRequiresAction(isRequiresAction);
     if (isRequiresAction) setOpen(true);
@@ -579,7 +733,18 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
 
   return (
     <ToolFallbackRoot open={open} onOpenChange={setOpen}>
-      <ToolFallbackTrigger toolName={toolName} status={status} />
+      <div className="flex items-center gap-0.5">
+        <ToolFallbackTrigger toolName={toolName} status={status} />
+        <button
+          type="button"
+          aria-label={t("toolDetail")}
+          title={t("toolDetail")}
+          onClick={() => setDetailOpen(true)}
+          className="text-muted-foreground hover:text-foreground hover:bg-muted inline-flex size-6 shrink-0 items-center justify-center rounded transition-colors"
+        >
+          <SquareArrowOutUpRightIcon className="size-3.5" />
+        </button>
+      </div>
       <ToolFallbackContent>
         <ToolFallbackError status={status} />
         <ToolFallbackArgs
@@ -598,6 +763,14 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
         )}
         {!isCancelled && <ToolFallbackResult result={result} />}
       </ToolFallbackContent>
+      <ToolDetailDialog
+        open={detailOpen}
+        onOpenChange={setDetailOpen}
+        toolName={toolName}
+        argsText={argsText}
+        result={result}
+        status={status}
+      />
     </ToolFallbackRoot>
   );
 };

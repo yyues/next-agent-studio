@@ -197,6 +197,25 @@ export async function loadSkillsByRoleId(
   return Array.from(merged.values());
 }
 
+/** 全局库 skill 元数据(scope=global,roleId 固定 general,管理员维护) */
+export async function listGlobalSkillDocs() {
+  await connectToMongo();
+  return SkillDocModel.find({ scope: "global", enabled: true }).lean();
+}
+
+/** 按元数据批量加载 skill 全文(引用挂载/全局库共用) */
+export async function loadSkillModulesForDocs(
+  docs: Array<Record<string, unknown>>,
+): Promise<SkillModule[]> {
+  const modules = await mapWithConcurrency(docs, 4, (d) =>
+    loadSkillForDoc(
+      String((d as { roleId?: string }).roleId ?? ""),
+      d as never,
+    ).catch(() => null),
+  );
+  return modules.filter((m): m is SkillModule => m !== null);
+}
+
 /**
  * 获取指定角色下所有可用的 skill ID 列表:合并内置 + 上传。
  * 只取 id,不读 Blob 内容(列表场景无需全文,跨洋读取单次数百毫秒起)。

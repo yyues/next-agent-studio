@@ -29,6 +29,12 @@ const skillDocSchema = new Schema(
     // Vercel Blob 前缀，指向 zip 解压后的文件目录，如 "skills/pm/product-manager/"
     blobPath: { type: String, default: "" },
     enabled: { type: Boolean, default: true },
+    /** role=角色私有;global=全局库(roleId 固定为 general,管理员维护) */
+    scope: {
+      type: String,
+      enum: ["role", "global"],
+      default: "role",
+    },
   },
   {
     timestamps: true,

@@ -5,13 +5,25 @@ import { connectToMongo } from "@/lib/mongodb";
 import { ProviderConfigModel } from "@/lib/models/provider-config";
 import { ProviderEntryModel } from "@/lib/models/provider-entry";
 import { RoleProfileModel } from "@/lib/models/role-profile";
-import { UserSettingModel } from "@/lib/models/user-setting";
 import { RoleResourceModel } from "@/lib/models/role-resource";
 import {
   removeRoleSkillDir,
 } from "@/lib/skills";
-import { loadSkillsByRoleIdCached } from "@/lib/skills-cache";
+import {
+  loadEffectiveSkillsCached,
+  invalidateSkillsCache,
+  invalidateAllSkillsCache,
+} from "@/lib/skills-cache";
 import { SkillDocModel } from "@/lib/models/skill-doc";
+import { BUILTIN_USER_ID, GLOBAL_ROLE_ID, isReservedRoleId } from "@/lib/scopes";
+import { isAdminUser } from "@/lib/admin";
+import {
+  validateSkillRefs,
+  validateMcpRefs,
+  findSkillDocsByRefs,
+  toRefKey,
+} from "@/lib/resource-refs";
+import { listGlobalSkillDocs } from "@/lib/skills";
 import { removeRoleResourceDir } from "@/lib/resources";
 import { encryptSecret, decryptSecret } from "@/lib/secret-crypto";
 
@@ -32,11 +44,16 @@ export type RoleProfile = {
   description: string;
   enabled: boolean;
   systemPrompt: string;
+  /** 引用的外部 skill 键(`${srcRoleId}/${skillId}`);自己上传的不在此列 */
   skillIds: string[];
+  /** 引用的外部 MCP 键(`${srcRoleId}/${serverId}`,`__global__` 为全局库) */
+  mcpRefs: string[];
   toolToggles: Record<string, boolean>;
   priority: number;
   /** 新会话欢迎页的开场建议问题(逐条展示,点击即发送) */
   suggestions: string[];
+  /** private=私有;public=管理员发布的通用角色 */
+  visibility: "private" | "public";
 };
 
 const defaultProviderSettings: ProviderSettings = {
@@ -70,6 +87,7 @@ const defaultRoleProfiles: RoleProfile[] = [
 - 翻译保留原意与语气,不随意增删内容。
 - 用户的问题有歧义时,先给出最可能的理解并作答,再提示可以补充信息修正方向。`,
     skillIds: ["base"],
+    mcpRefs: [],
     toolToggles: {},
     priority: 0,
     suggestions: [
@@ -80,6 +98,7 @@ const defaultRoleProfiles: RoleProfile[] = [
       "用通俗的语言解释一个专业概念",
       "头脑风暴:给我 10 个产品命名思路",
     ],
+    visibility: "public",
   },
   {
     roleId: "developer",
@@ -98,6 +117,7 @@ const defaultRoleProfiles: RoleProfile[] = [
 - 技术选型对比给出维度明确的对比表,并基于场景给出明确推荐。
 - 不臆测不存在的 API;对不确定的库行为注明需要验证。`,
     skillIds: ["base", "developer"],
+    mcpRefs: [],
     toolToggles: {},
     priority: 1,
     suggestions: [
@@ -108,6 +128,7 @@ const defaultRoleProfiles: RoleProfile[] = [
       "对比两种技术方案的优劣并给出选型建议",
       "帮我写一个正则表达式并解释规则",
     ],
+    visibility: "public",
   },
 ];
 
@@ -117,15 +138,55 @@ export function isBuiltinRole(roleId: string) {
   return builtinRoleIds.has(roleId);
 }
 
+/** 内置 roleId 列表(查询排除用) */
+export const builtinRoleIdList = () => Array.from(builtinRoleIds);
+
+/** useraccounts 原生集合:currentRoleId 读写绕过 mongoose 模型(见 getRoleSettings 注释) */
+const userAccountsRaw = () => mongoose.connection.db!.collection("useraccounts");
+
 /**
- * 角色 ownership 守卫:内置角色共享;自定义角色必须属于该 userId。
- * 用于 skills/resources 等按 roleId 存储的端点,防止跨用户改动。
+ * 个人可见子句:自己的私有角色。内置 roleId 的历史个人副本(单例化前的播种数据)
+ * 以 __builtin__ 单例为准,一律不再读取,避免列表重复与编辑目标歧义。
+ */
+export function personalRoleClause(userId: string) {
+  return { userId, roleId: { $nin: Array.from(builtinRoleIds) } };
+}
+
+/** 可见集合:自己的私有角色 + 内置单例(__builtin__) + 管理员发布的通用角色 */
+export function visibleRoleFilter(userId: string) {
+  return {
+    $or: [
+      personalRoleClause(userId),
+      { userId: BUILTIN_USER_ID },
+      { visibility: "public" },
+    ],
+  };
+}
+
+/**
+ * 角色 ownership 守卫:写入类操作(skills/resources/MCP 上传删除等)的权限校验。
+ * - 自己的私有角色:本人可写
+ * - 通用角色(内置单例 + 已发布 public):仅管理员可写
  */
 export async function assertRoleAccess(userId: string, roleId: string) {
-  if (isBuiltinRole(roleId)) return;
   await connectToMongo();
-  const doc = await RoleProfileModel.findOne({ userId, roleId }).lean();
+  const doc = await RoleProfileModel.findOne({
+    roleId,
+    ...visibleRoleFilter(userId),
+  })
+    .select("userId visibility")
+    .lean();
+
   if (!doc) throw new Error("Role not found for this user.");
+
+  const isShared = isBuiltinRole(roleId) || doc.visibility === "public";
+  if (isShared) {
+    if (!(await isAdminUser(userId))) {
+      throw new Error("Shared roles can only be modified by admins.");
+    }
+    return;
+  }
+  if (doc.userId !== userId) throw new Error("Role not found for this user.");
 }
 
 export function normalizeUserId(input: unknown) {
@@ -165,11 +226,15 @@ function toRoleProfile(doc: Record<string, unknown>): RoleProfile {
     skillIds: Array.isArray(doc.skillIds)
       ? doc.skillIds.map((v) => String(v))
       : [],
+    mcpRefs: Array.isArray(doc.mcpRefs)
+      ? doc.mcpRefs.map((v) => String(v))
+      : [],
     toolToggles,
     priority: Number(doc.priority ?? 0),
     suggestions: Array.isArray(doc.suggestions)
       ? (doc.suggestions as unknown[]).map((v) => String(v)).filter(Boolean)
       : [],
+    visibility: doc.visibility === "public" ? "public" : "private",
   };
 }
 
@@ -552,27 +617,31 @@ export async function testProviderSettings(payload: Partial<ProviderSettings>) {
 
 /**
  * 将内置角色同步到数据库（首次查询时自动调用）
- * 对每个内置角色执行 upsert，确保数据库中始终存在默认角色记录
+ * 对每个内置角色执行 upsert。内置角色存为 __builtin__ 用户名下的
+ * 单例共享文档:所有用户读同一份,仅管理员可编辑
+ * (历史上的 per-user 副本不再读取)。
  */
-async function seedDefaultRoles(userId: string) {
+async function seedDefaultRoles() {
   // 并行 upsert(跨洋写单次数百毫秒)
   await Promise.all(
     defaultRoleProfiles.map((role) =>
       RoleProfileModel.findOneAndUpdate(
-        { userId, roleId: role.roleId },
+        { userId: BUILTIN_USER_ID, roleId: role.roleId },
         [
           {
             $set: {
-              userId: { $ifNull: ["$userId", userId] },
+              userId: { $ifNull: ["$userId", BUILTIN_USER_ID] },
               roleId: { $ifNull: ["$roleId", role.roleId] },
               displayName: { $ifNull: ["$displayName", role.displayName] },
               description: { $ifNull: ["$description", role.description] },
               enabled: { $ifNull: ["$enabled", role.enabled] },
               systemPrompt: { $ifNull: ["$systemPrompt", role.systemPrompt] },
               skillIds: { $ifNull: ["$skillIds", role.skillIds] },
+              mcpRefs: { $ifNull: ["$mcpRefs", []] },
               toolToggles: { $ifNull: ["$toolToggles", role.toolToggles] },
               priority: { $ifNull: ["$priority", role.priority] },
               suggestions: { $ifNull: ["$suggestions", role.suggestions] },
+              visibility: { $ifNull: ["$visibility", "public"] },
             },
           },
         ],
@@ -585,10 +654,17 @@ export async function getRoleSettings(userId: string) {
   try {
     await connectToMongo();
 
-    // 两个读取并行;常态(已播种)不再执行两次播种写
-    const [userSetting, dbRoleDocs] = await Promise.all([
-      UserSettingModel.findOne({ userId }).lean(),
-      RoleProfileModel.find({ userId }).lean(),
+    // 可见集合:自己的私有角色 + 内置单例(__builtin__) + 管理员发布的通用角色
+    const visibleFilter = visibleRoleFilter(userId);
+
+    // 两个读取并行;常态(已播种)不再执行两次播种写。
+    // currentRoleId 走原生集合:开发态热更新后 mongoose 注册表可能仍持有
+    // 旧 schema(无此字段),模型读写会把它静默剥离
+    const [accountRaw, dbRoleDocs] = await Promise.all([
+      userAccountsRaw()
+        .findOne({ email: userId }, { projection: { currentRoleId: 1 } })
+        .catch(() => null),
+      RoleProfileModel.find(visibleFilter).lean(),
     ]);
 
     let docs = dbRoleDocs;
@@ -596,28 +672,18 @@ export async function getRoleSettings(userId: string) {
       docs.some((doc) => doc.roleId === d.roleId),
     );
     if (!hasAllDefaults) {
-      await seedDefaultRoles(userId);
-      docs = await RoleProfileModel.find({ userId }).lean();
+      await seedDefaultRoles();
+      docs = await RoleProfileModel.find(visibleFilter).lean();
     }
 
-    const dbRoles = docs.map((doc) =>
-      toRoleProfile(doc as Record<string, unknown>),
-    );
+    const roles = docs
+      .map((doc) => toRoleProfile(doc as Record<string, unknown>))
+      .sort((a, b) => a.priority - b.priority);
 
-    const mergedById = new Map(
-      defaultRoleProfiles.map((role) => [role.roleId, role]),
-    );
-    for (const role of dbRoles) {
-      mergedById.set(role.roleId, role);
-    }
-
-    const roles = Array.from(mergedById.values()).sort(
-      (a, b) => a.priority - b.priority,
-    );
-
+    const roleIdSet = new Set(roles.map((r) => r.roleId));
     const currentRoleId =
-      userSetting?.currentRoleId && mergedById.has(userSetting.currentRoleId)
-        ? userSetting.currentRoleId
+      accountRaw?.currentRoleId && roleIdSet.has(accountRaw.currentRoleId)
+        ? accountRaw.currentRoleId
         : "general";
 
     return {
@@ -639,8 +705,13 @@ export async function getRoleSettings(userId: string) {
 export async function setCurrentRole(userId: string, roleId: string) {
   await connectToMongo();
 
-  // 单查校验(库文档覆盖内置默认;不再整跑 getRoleSettings 省一轮 Mongo 往返)
-  const doc = await RoleProfileModel.findOne({ userId, roleId }).lean();
+  // 单查校验:可见集合(自己的/内置/已发布)内且 enabled 才可切换
+  const doc = await RoleProfileModel.findOne({
+    roleId,
+    ...visibleRoleFilter(userId),
+  })
+    .select("enabled")
+    .lean();
   const enabled = doc
     ? Boolean(doc.enabled)
     : defaultRoleProfiles.find((r) => r.roleId === roleId)?.enabled === true;
@@ -648,10 +719,11 @@ export async function setCurrentRole(userId: string, roleId: string) {
     throw new Error("Invalid roleId.");
   }
 
-  await UserSettingModel.findOneAndUpdate(
-    { userId },
-    { userId, currentRoleId: roleId },
-    { upsert: true, returnDocument: "after", setDefaultsOnInsert: true },
+  // 并入账号表(原生写入,理由同 getRoleSettings);无账号记录的
+  // fallback 用户(demo-user)不持久化,仅本次会话生效
+  await userAccountsRaw().updateOne(
+    { email: userId },
+    { $set: { currentRoleId: roleId } },
   );
 
   return {
@@ -708,9 +780,13 @@ export async function resolveRuntimeConfig(input: {
     roleSettings.roles.find((item) => item.roleId === roleId && item.enabled) ??
     roleSettings.roles[0];
 
-    // const validSkillIds = role.skillIds.filter((id) => availableSkillIds.includes(id));
-    // 按角色加载 skills(进程内 TTL 缓存,命中时聊天消息不再回源 Blob)
-    const loadedSkills = await loadSkillsByRoleIdCached(roleId);
+  // 角色有效 skills(进程内 TTL 缓存):自己上传的 + 引用挂载的
+  // + 内置角色自动包含全局库;命中时聊天消息不再回源 Blob
+  const loadedSkills = await loadEffectiveSkillsCached(
+    roleId,
+    role.skillIds ?? [],
+    isBuiltinRole(roleId),
+  );
   // 显式 /命令 调用 → 仅注入命中技能(显式优先);未使用 / 时保持全量注入
   const explicitCommands = (input.invokedSkillCommands ?? []).map((c) =>
     c.toLowerCase(),
@@ -782,8 +858,8 @@ export async function createRole(
 
   // roleId 缺省时直接用 Mongo 自动生成的 ObjectId(全局唯一,URL/Blob 路径安全)
   const roleId = payload.roleId?.trim() || new mongoose.Types.ObjectId().toString();
-  if (isBuiltinRole(roleId)) {
-    throw new Error("Cannot create a role with a built-in roleId.");
+  if (isBuiltinRole(roleId) || isReservedRoleId(roleId)) {
+    throw new Error("Cannot create a role with a reserved roleId.");
   }
 
   const existing = await RoleProfileModel.findOne({
@@ -801,10 +877,12 @@ export async function createRole(
     systemPrompt: payload.systemPrompt,
     description: payload.description ?? "",
     enabled: payload.enabled ?? true,
-    skillIds: ["base"],
+    skillIds: [],
+    mcpRefs: [],
     toolToggles: {},
     priority: payload.priority ?? 10,
     suggestions: (payload.suggestions ?? []).map((v) => v.trim()).filter(Boolean),
+    visibility: "private",
   });
 
   return toRoleProfile(doc.toObject() as Record<string, unknown>);
@@ -820,13 +898,42 @@ export async function updateRole(
     enabled: boolean;
     priority: number;
     suggestions: string[];
+    /** 引用挂载的外部 skill 键列表(整体替换) */
+    skillIds: string[];
+    /** 引用挂载的外部 MCP 键列表(整体替换) */
+    mcpRefs: string[];
+    /** 发布为通用角色 / 下架(仅管理员) */
+    visibility: "private" | "public";
   }>,
 ) {
   await connectToMongo();
 
-  // 内置角色同样可编辑(按用户维度覆盖);未拉取过角色列表时库中尚无
-  // 播种文档,先补种一份再更新,避免 "Role not found."
-  if (isBuiltinRole(roleId)) await seedDefaultRoles(userId);
+  const admin = await isAdminUser(userId);
+
+  // 内置角色为 __builtin__ 单例文档;未播种时先补种(常态零写)
+  if (isBuiltinRole(roleId)) {
+    if (!admin) {
+      throw new Error("Shared roles can only be modified by admins.");
+    }
+    await seedDefaultRoles();
+  }
+
+  // 可编辑范围:自己的私有角色,或通用角色(内置/已发布,仅管理员)
+  const existing = await RoleProfileModel.findOne({
+    roleId,
+    ...visibleRoleFilter(userId),
+  }).lean();
+  if (!existing) {
+    throw new Error("Role not found.");
+  }
+  const isShared =
+    isBuiltinRole(roleId) || existing.visibility === "public";
+  if (isShared && !admin) {
+    throw new Error("Shared roles can only be modified by admins.");
+  }
+  if (!isShared && existing.userId !== userId) {
+    throw new Error("Role not found.");
+  }
 
   const update: Record<string, unknown> = {};
   if (payload.displayName !== undefined)
@@ -842,9 +949,25 @@ export async function updateRole(
       .map((s) => s.trim())
       .filter(Boolean)
       .slice(0, 6);
+  if (payload.skillIds !== undefined) {
+    // 引用合法性:全局库 + 自己的角色;非法项静默丢弃
+    update.skillIds = await validateSkillRefs(userId, payload.skillIds);
+  }
+  if (payload.mcpRefs !== undefined) {
+    update.mcpRefs = await validateMcpRefs(userId, payload.mcpRefs);
+  }
+  if (payload.visibility !== undefined) {
+    if (!admin) {
+      throw new Error("Only admins can publish roles.");
+    }
+    if (isBuiltinRole(roleId)) {
+      throw new Error("Built-in roles are always shared.");
+    }
+    update.visibility = payload.visibility;
+  }
 
   const doc = await RoleProfileModel.findOneAndUpdate(
-    { userId, roleId },
+    { userId: existing.userId, roleId },
     { $set: update },
     { returnDocument: "after" },
   ).lean();
@@ -853,24 +976,37 @@ export async function updateRole(
     throw new Error("Role not found.");
   }
 
+  // 引用变化影响聊天注入的有效 skills,逐出该角色缓存
+  if (update.skillIds !== undefined) invalidateSkillsCache(roleId);
+
   return toRoleProfile(doc as Record<string, unknown>);
 }
 
 export async function deleteRole(userId: string, roleId: string) {
-  if (isBuiltinRole(roleId)) {
+  if (isBuiltinRole(roleId) || isReservedRoleId(roleId)) {
     throw new Error("Built-in roles cannot be deleted.");
   }
 
   await connectToMongo();
 
-  const result = await RoleProfileModel.deleteOne({ userId, roleId });
-  if (result.deletedCount === 0) {
+  // 可删除范围:自己的私有角色;已发布(public)角色仅管理员
+  const existing = await RoleProfileModel.findOne({
+    roleId,
+    $or: [personalRoleClause(userId), { visibility: "public" }],
+  }).lean();
+  if (!existing) {
     throw new Error("Role not found.");
   }
+  if (existing.visibility === "public" && !(await isAdminUser(userId))) {
+    throw new Error("Shared roles can only be modified by admins.");
+  }
+
+  await RoleProfileModel.deleteOne({ userId: existing.userId, roleId });
 
   // 清理角色对应的 skill 目录
   await removeRoleSkillDir(roleId);
   await removeRoleResourceDir(roleId);
+  invalidateSkillsCache(roleId);
 
   return { deleted: true };
 }
@@ -879,11 +1015,18 @@ export async function getRoleById(userId: string, roleId: string) {
   await connectToMongo();
 
   const defaultRole = defaultRoleProfiles.find((r) => r.roleId === roleId);
-  let doc = await RoleProfileModel.findOne({ userId, roleId }).lean();
+  // 可见范围:自己的私有角色 + 内置单例 + 已发布通用角色
+  let doc = await RoleProfileModel.findOne({
+    roleId,
+    ...visibleRoleFilter(userId),
+  }).lean();
   // 仅当查询的是内置角色且库中缺失时才播种(常态零写)
   if (!doc && defaultRole) {
-    await seedDefaultRoles(userId);
-    doc = await RoleProfileModel.findOne({ userId, roleId }).lean();
+    await seedDefaultRoles();
+    doc = await RoleProfileModel.findOne({
+      userId: BUILTIN_USER_ID,
+      roleId,
+    }).lean();
   }
   const role = doc
     ? toRoleProfile(doc as Record<string, unknown>)
@@ -891,21 +1034,63 @@ export async function getRoleById(userId: string, roleId: string) {
 
   if (!role) throw new Error("Role not found.");
 
+  const admin = await isAdminUser(userId);
+  const isShared = isBuiltinRole(roleId) || role.visibility === "public";
+  // 通用角色仅管理员可编辑;私有角色仅本人
+  const editable = isShared ? admin : Boolean(doc && doc.userId === userId);
+
   // 只查 SkillDoc 元数据,不读 Blob 全文(列表展示字段全够;
-  // 全文仅聊天注入时经 loadSkillsByRoleIdCached 读取并缓存)
-  const [skillDocs, resources] = await Promise.all([
-    SkillDocModel.find({ roleId, enabled: true }).lean(),
+  // 全文仅聊天注入时经 loadEffectiveSkillsCached 读取并缓存)。
+  // skills = 自己上传的 + 引用挂载的(全局库/自己角色),内置角色另含全局库
+  const [skillDocs, resources, globalDocs, refDocs] = await Promise.all([
+    SkillDocModel.find({ roleId, enabled: true, scope: "role" }).lean(),
     RoleResourceModel.find({ roleId }).lean(),
+    isBuiltinRole(roleId) ? listGlobalSkillDocs() : Promise.resolve([]),
+    (role.skillIds ?? []).length > 0
+      ? findSkillDocsByRefs(role.skillIds)
+      : Promise.resolve([]),
   ]);
+
+  const ownKeys = new Set(
+    skillDocs.map((d) => `${d.roleId}/${d.skillId}`),
+  );
+  const refEntries = [
+    ...(globalDocs as Array<Record<string, unknown>>).map((d) => ({
+      doc: d,
+      ref: toRefKey(String(d.roleId), String(d.skillId)),
+      source: "global" as const,
+    })),
+    ...refDocs.map((d) => ({
+      doc: d,
+      ref: toRefKey(String(d.roleId), String(d.skillId)),
+      source: (d.scope === "global" ? "global" : "role") as
+        | "global"
+        | "role",
+    })),
+  ].filter((e) => !ownKeys.has(e.ref));
 
   return {
     role,
-    skills: skillDocs.map((d) => ({
-      skillId: d.skillId,
-      title: d.title,
-      description: d.description ?? "",
-      version: d.version,
-    })),
+    editable,
+    isAdmin: admin,
+    skills: [
+      ...skillDocs.map((d) => ({
+        skillId: d.skillId,
+        title: d.title,
+        description: d.description ?? "",
+        version: d.version,
+        source: "own" as const,
+        ref: null as string | null,
+      })),
+      ...refEntries.map(({ doc: d, ref, source }) => ({
+        skillId: String(d.skillId),
+        title: String(d.title),
+        description: String(d.description ?? ""),
+        version: d.version,
+        source,
+        ref,
+      })),
+    ],
     resources: resources.map((r) => ({
       resourceId: r.resourceId,
       fileName: r.fileName,
@@ -914,3 +1099,6 @@ export async function getRoleById(userId: string, roleId: string) {
     })),
   };
 }
+
+/** 全局库伪角色 id,供前端路由规避(不可作为真实角色访问) */
+export { GLOBAL_ROLE_ID };

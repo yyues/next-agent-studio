@@ -4,13 +4,7 @@
  *
  * skill 规范：zip 内含 SKILL.md（YAML frontmatter 元数据 + 指令正文），
  * 可选 prompts/、knowledge/ 子目录。frontmatter 字段：name(id)/title/description/version。
- *
- * 上传流程（按 zip 原结构逐文件解压到 Vercel Blob，不生成合并 JSON）：
- * 1. 接收 multipart/form-data 中的 zip 文件，内存解压
- * 2. 找到 SKILL.md，解析 frontmatter 取元数据（name/title/description/version）
- * 3. 计算 zip MD5，查数据库去重
- * 4. 把 zip 内每个文件按原相对路径存到 skills/{roleId}/{skillId}/ 前缀下
- * 5. 写入 MongoDB 元数据记录（blobPath = 前缀）
+ * 上传核心见 lib/skills/upload.ts（与全局库上传共用）。
  *
  * 列表：合并 文件系统内置 skill（仓库提交，按 SKILL.md 扫描）+ 数据库上传 skill
  */
@@ -19,13 +13,13 @@ import { getAuthUserId } from "@/lib/auth-request";
 import { assertRoleAccess } from "@/lib/server-settings";
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import { join, resolve } from "path";
-import { createHash } from "crypto";
-import AdmZip from "adm-zip";
 import { connectToMongo } from "@/lib/mongodb";
 import { SkillDocModel } from "@/lib/models/skill-doc";
-import { blobPut, blobListPathnames, blobDel } from "@/lib/blob";
-import { mapWithConcurrency } from "@/lib/utils";
 import { parseFrontmatter } from "@/lib/skills";
+import {
+  uploadSkillZip,
+  SkillUploadRejected,
+} from "@/lib/skills/upload";
 import { invalidateSkillsCache } from "@/lib/skills-cache";
 
 const SKILLS_ROOT = resolve(process.cwd(), "skills");
@@ -124,130 +118,23 @@ export async function POST(
       );
     }
 
-    // 读取 zip 文件为 Buffer
-    const arrayBuffer = await file.arrayBuffer();
-    const zipBuffer = Buffer.from(arrayBuffer);
-
-    // 计算 MD5 用于去重校验
-    const md5 = createHash("md5").update(zipBuffer).digest("hex");
-
-    // 内存解压
-    const zip = new AdmZip(zipBuffer);
-    const entries = zip.getEntries();
-
-    // 查找 SKILL.md（可能在根目录或一级子目录下）
-    let skillMdEntry = entries.find((e) => e.entryName === "SKILL.md");
-    if (!skillMdEntry) {
-      skillMdEntry = entries.find((e) => e.entryName.endsWith("/SKILL.md"));
-    }
-    if (!skillMdEntry) {
-      return NextResponse.json(
-        { error: "Zip archive must contain a SKILL.md file." },
-        { status: 400 },
-      );
-    }
-
-    const { meta } = parseFrontmatter(
-      skillMdEntry.getData().toString("utf-8"),
-    );
-    const skillId = meta.name || meta.id;
-    if (!skillId) {
-      return NextResponse.json(
-        { error: "SKILL.md frontmatter must contain a 'name' field." },
-        { status: 400 },
-      );
-    }
-    const title = meta.title || skillId;
-
-    // 计算 zip 根目录前缀（如 "product-manager/"），后续读文件时去掉
-    const rootPrefix = skillMdEntry.entryName.includes("/")
-      ? skillMdEntry.entryName.split("/")[0] + "/"
-      : null;
-
-    // 数据库去重校验(结构化错误码,前端据此分支:同名需确认后带 overwrite 重传)
-    await connectToMongo();
-    const existingByMd5 = await SkillDocModel.findOne({ roleId, md5 }).lean();
-    if (existingByMd5) {
-      return NextResponse.json(
-        {
-          error: "DUPLICATE_CONTENT",
-          existing: existingByMd5,
-        },
-        { status: 409 },
-      );
-    }
-
+    const zipBuffer = Buffer.from(await file.arrayBuffer());
     const overwrite =
       new URL(req.url).searchParams.get("overwrite") === "true";
-    const existingById = await SkillDocModel.findOne({ roleId, skillId }).lean();
-    if (existingById && !overwrite) {
-      return NextResponse.json(
-        {
-          error: "SKILL_ID_EXISTS",
-          existing: {
-            skillId: existingById.skillId,
-            title: existingById.title,
-            version: existingById.version,
-          },
-        },
-        { status: 409 },
-      );
-    }
 
-    const blobPrefix = `skills/${roleId}/${skillId}/`;
-
-    // 覆盖升级:先清掉旧 zip 的全部文件,避免旧结构残留(与 resources 路由对齐)
-    if (existingById) {
-      try {
-        const oldPathnames = await blobListPathnames(blobPrefix);
-        if (oldPathnames.length > 0) await blobDel(oldPathnames);
-      } catch {
-        // 旧文件清理失败不阻断覆盖写入
-      }
-    }
-
-    // 按 zip 原结构逐文件解压到 Vercel Blob 的 skills/{roleId}/{skillId}/ 前缀下;
-    // 远程 Blob 单次往返数百毫秒,并发写入(上限 6)避免随文件数线性变慢
-    const files = entries.flatMap((entry) => {
-      if (entry.isDirectory) return [];
-      let relPath = entry.entryName;
-      if (rootPrefix) {
-        if (!relPath.startsWith(rootPrefix)) return []; // 跳过 skill 目录之外的杂散文件
-        relPath = relPath.slice(rootPrefix.length);
-      }
-      if (!relPath) return [];
-      return [{ path: blobPrefix + relPath, data: entry.getData() }];
-    });
-    await mapWithConcurrency(files, 6, (f) => blobPut(f.path, f.data));
-
-    // 写入数据库元记录（upsert：skillId 存在则更新）
-    await SkillDocModel.findOneAndUpdate(
-      { roleId, skillId },
-      {
-        roleId,
-        skillId,
-        version: meta.version || "1.0.0",
-        title,
-        description: meta.description || "",
-        md5,
-        filePath: `skills/${roleId}/${skillId}`,
-        blobPath: blobPrefix,
-        enabled: true,
-      },
-      { upsert: true, returnDocument: "after", setDefaultsOnInsert: true },
-    );
+    const result = await uploadSkillZip(roleId, zipBuffer, { overwrite });
 
     // 内容已变化,逐出该角色的 skills 进程内缓存(聊天注入立即读到新版本)
     invalidateSkillsCache(roleId);
 
-    return NextResponse.json({
-      skillId,
-      roleId,
-      title,
-      md5,
-      filePath: `skills/${roleId}/${skillId}`,
-    });
+    return NextResponse.json(result);
   } catch (error) {
+    if (error instanceof SkillUploadRejected) {
+      return NextResponse.json(
+        { error: error.code, existing: error.existing },
+        { status: 409 },
+      );
+    }
     const message =
       error instanceof Error ? error.message : "Failed to upload skill.";
     return NextResponse.json({ error: message }, { status: 500 });

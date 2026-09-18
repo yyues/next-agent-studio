@@ -1,16 +1,13 @@
 /**
  * DELETE /api/settings/skills/[roleId]/[skillId]
  *
- * 删除指定角色下的某个 skill 包：
- * 1. 从 MongoDB 删除元数据记录
- * 2. 删除 Vercel Blob 中该 skill 前缀下的所有解压文件
+ * 删除指定角色下的某个 skill 包（元数据 + Blob 文件）。
+ * 通用角色(内置/已发布)仅管理员可删(见 assertRoleAccess)。
  */
 import { NextResponse } from "next/server";
-import { connectToMongo } from "@/lib/mongodb";
-import { SkillDocModel } from "@/lib/models/skill-doc";
-import { blobDel, blobListPathnames } from "@/lib/blob";
 import { getAuthUserId } from "@/lib/auth-request";
 import { assertRoleAccess } from "@/lib/server-settings";
+import { deleteSkill } from "@/lib/skills/upload";
 import { invalidateSkillsCache } from "@/lib/skills-cache";
 
 export async function DELETE(
@@ -26,39 +23,23 @@ export async function DELETE(
     );
     await assertRoleAccess(caller, roleId);
   } catch (e) {
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : "Access denied." },
-      { status: 403 },
-    );
+    const message = e instanceof Error ? e.message : "Access denied.";
+    const status = message.includes("admins") ? 403 : 404;
+    return NextResponse.json({ error: message }, { status });
   }
 
   try {
     const { roleId, skillId } = await params;
-
-    // 1. 删除数据库记录
-    await connectToMongo();
-    const doc = await SkillDocModel.findOneAndDelete({ roleId, skillId }).lean();
-    if (!doc) {
-      return NextResponse.json({ error: "Skill not found." }, { status: 404 });
-    }
-
-    // 2. 删除 Blob 内容（blobPath 为前缀，列出其下所有文件后批量删除）
-    if (doc.blobPath) {
-      try {
-        const pathnames = await blobListPathnames(doc.blobPath);
-        if (pathnames.length > 0) await blobDel(pathnames);
-      } catch {
-        // Blob 已不存在则忽略
-      }
-    }
+    const result = await deleteSkill(roleId, skillId, "role");
 
     // 内容已变化,逐出该角色的 skills 进程内缓存(聊天注入立即读到删除后的版本)
     invalidateSkillsCache(roleId);
 
-    return NextResponse.json({ deleted: true, skillId, roleId });
+    return NextResponse.json(result);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to delete skill.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const status = message === "Skill not found." ? 404 : 500;
+    return NextResponse.json({ error: message }, { status });
   }
 }

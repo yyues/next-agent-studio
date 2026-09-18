@@ -82,7 +82,14 @@ export const useCommandRegistry = create<CommandRegistryState>((set, get) => ({
       }
       if (mcpRes.status === "fulfilled" && mcpRes.value.ok) {
         const data = (await mcpRes.value.json()) as {
-          servers?: { serverId: string; name: string; url: string }[];
+          servers?: {
+            serverId: string;
+            name: string;
+            url: string;
+            type?: "http" | "stdio";
+            command?: string;
+            args?: string[];
+          }[];
         };
         for (const s of data.servers ?? []) {
           commands.push({
@@ -90,7 +97,10 @@ export const useCommandRegistry = create<CommandRegistryState>((set, get) => ({
             id: s.serverId,
             name: s.name,
             label: s.name,
-            description: s.url,
+            description:
+              s.type === "stdio"
+                ? [s.command, ...(s.args ?? [])].filter(Boolean).join(" ")
+                : s.url,
           });
         }
       }

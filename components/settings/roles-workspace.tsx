@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState, type FC } from "react";
 import { useTranslations } from "next-intl";
 import { useRouter } from "@/i18n/navigation";
-import { BotIcon, Loader2Icon, PlusIcon } from "lucide-react";
+import { BotIcon, GlobeIcon, Loader2Icon, PlusIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -23,6 +23,8 @@ type RoleItem = {
   displayName: string;
   description?: string;
   enabled: boolean;
+  /** public=管理员发布的通用角色(列表分组用) */
+  visibility?: "private" | "public";
 };
 
 type RoleForm = {
@@ -164,8 +166,13 @@ export const RolesWorkspace: FC<{ initialRoleId?: string }> = ({
     [applyRoleDeleted],
   );
 
-  const builtin = roles.filter((r) => builtinRoleIds.has(r.roleId));
-  const custom = roles.filter((r) => !builtinRoleIds.has(r.roleId));
+  // 分组:通用(内置 + 管理员发布) / 我的
+  const common = roles.filter(
+    (r) => builtinRoleIds.has(r.roleId) || r.visibility === "public",
+  );
+  const mine = roles.filter(
+    (r) => !builtinRoleIds.has(r.roleId) && r.visibility !== "public",
+  );
 
   const renderRow = (role: RoleItem) => {
     const active = role.roleId === selectedId;
@@ -239,20 +246,21 @@ export const RolesWorkspace: FC<{ initialRoleId?: string }> = ({
             </p>
           ) : (
             <div className="grid gap-3">
-              {builtin.length > 0 && (
+              {common.length > 0 && (
                 <section>
-                  <h3 className="text-muted-foreground mb-1 px-2.5 text-[11px] font-medium tracking-wider uppercase">
-                    {t("builtin")}
+                  <h3 className="text-muted-foreground mb-1 flex items-center gap-1.5 px-2.5 text-[11px] font-medium tracking-wider uppercase">
+                    <GlobeIcon className="size-3" />
+                    {t("sharedGroup")}
                   </h3>
-                  <div className="grid gap-0.5">{builtin.map(renderRow)}</div>
+                  <div className="grid gap-0.5">{common.map(renderRow)}</div>
                 </section>
               )}
-              {custom.length > 0 && (
+              {mine.length > 0 && (
                 <section>
                   <h3 className="text-muted-foreground mb-1 px-2.5 text-[11px] font-medium tracking-wider uppercase">
-                    {t("custom")}
+                    {t("myGroup")}
                   </h3>
-                  <div className="grid gap-0.5">{custom.map(renderRow)}</div>
+                  <div className="grid gap-0.5">{mine.map(renderRow)}</div>
                 </section>
               )}
             </div>
