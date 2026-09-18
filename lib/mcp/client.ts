@@ -1,4 +1,5 @@
 import "server-only";
+import { createHash } from "crypto";
 import { createMCPClient, type MCPClient } from "@ai-sdk/mcp";
 import { Experimental_StdioMCPTransport } from "@ai-sdk/mcp/mcp-stdio";
 import type { ToolSet } from "ai";
@@ -17,6 +18,53 @@ import { findMcpRowsByRefs } from "@/lib/resource-refs";
 const CONNECT_TIMEOUT_MS = 8000;
 // stdio 型首连较慢(npx 首次运行需下载依赖),放宽超时
 const STDIO_CONNECT_TIMEOUT_MS = 60000;
+/** 单次 MCP 工具调用超时:超时后向模型返回错误,对话继续而不是卡死 */
+const TOOL_CALL_TIMEOUT_MS = 30000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} (timeout ${ms}ms)`)), ms),
+    ),
+  ]);
+}
+
+/**
+ * 修复非规范 MCP 网关的兼容问题:
+ * 部分网关(如阿里云市场 mcpnacos)在 tools/list 无更多页时返回 nextCursor:""
+ * (规范要求此时省略该字段),SDK 分页会把空串当"还有下一页"无限重发请求,
+ * 表现为 tools() 永远不 resolve、聊天卡死。这里拦截 JSON 响应剥掉空 nextCursor;
+ * SSE 流响应原样透传。
+ */
+async function sanitizeMcpFetch(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> {
+  const res = await fetch(input, init);
+  const isToolsList =
+    (init?.method ?? "GET").toUpperCase() === "POST" &&
+    typeof init?.body === "string" &&
+    init.body.includes('"tools/list"');
+  if (!isToolsList) return res;
+  if (!(res.headers.get("content-type") ?? "").includes("application/json")) {
+    return res;
+  }
+  try {
+    const clone = res.clone();
+    const json = (await clone.json().catch(() => null)) as {
+      result?: { nextCursor?: unknown };
+    } | null;
+    if (!json?.result || json.result.nextCursor !== "") return res;
+    delete json.result.nextCursor;
+    return new Response(JSON.stringify(json), {
+      status: res.status,
+      headers: { "content-type": "application/json" },
+    });
+  } catch {
+    return res;
+  }
+}
 
 /** 连接目标:http 型(url+headers)或 stdio 型(command+args+env) */
 type McpConnectTarget = {
@@ -369,6 +417,8 @@ async function connectSingle(server: McpConnectTarget) {
               headers: Object.keys(server.headers ?? {}).length
                 ? server.headers
                 : undefined,
+              // 剥掉非规范网关返回的空 nextCursor,避免 tools/list 无限重发
+              fetch: sanitizeMcpFetch,
             },
           });
         })(),
@@ -385,7 +435,18 @@ async function connectSingle(server: McpConnectTarget) {
     ),
   ]);
 
-  const tools = await client.tools();
+  // tools() 无内建超时,非规范网关(空 nextCursor 分页等)会永久挂起,这里逐出
+  let tools;
+  try {
+    tools = await withTimeout(
+      client.tools(),
+      timeoutMs,
+      `MCP tools/list timeout: ${isStdio ? `${server.command}` : `${server.url}`}`,
+    );
+  } catch (e) {
+    await client.close().catch(() => undefined);
+    throw e;
+  }
   return {
     client,
     tools,
@@ -458,8 +519,34 @@ export async function loadMcpToolsForChat(input: {
     }
     const { server, tools: serverTools, toolNames } = result.value;
     for (const [toolName, tool] of Object.entries(serverTools)) {
+      // 包一层调用超时:网关挂起时向模型返回错误,对话继续而不是无限等待
+      const raw = tool as unknown as {
+        execute?: (args: unknown, opts: unknown) => Promise<unknown>;
+        description?: string;
+      };
+      if (typeof raw.execute === "function") {
+        const orig = raw.execute.bind(tool);
+        raw.execute = (args, opts) =>
+          withTimeout(
+            orig(args, opts),
+            TOOL_CALL_TIMEOUT_MS,
+            `MCP tool call timeout: ${server.serverId}/${toolName}`,
+          );
+      }
+      // 模型侧工具名必须匹配 ^[a-zA-Z0-9_-]+$(OpenAI 兼容接口强校验);
+      // 中文等非 ASCII 工具名(如阿里云市场网关)替换为短哈希,
+      // 原名并入描述让模型仍能理解用途。执行走工具对象内部绑定,不受改名影响。
+      let modelFacingName = toolName;
+      if (!/^[a-zA-Z0-9_-]+$/.test(toolName)) {
+        modelFacingName = `t_${createHash("md5")
+          .update(toolName)
+          .digest("hex")
+          .slice(0, 8)}`;
+        const desc = typeof raw.description === "string" ? raw.description : "";
+        raw.description = `[${toolName}] ${desc}`.trim();
+      }
       // as 断言:FlexibleSchema<unknown> 与 ToolSet 条目的 never 泛型存在方差不兼容,运行时无差异
-      tools[`mcp__${server.serverId}__${toolName}`] =
+      tools[`mcp__${server.serverId}__${modelFacingName}`] =
         tool as (typeof tools)[string];
     }
     serverSummaries.push({
