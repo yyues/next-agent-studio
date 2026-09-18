@@ -27,6 +27,13 @@ import {
 
 type ImportOutcome = { name: string; ok: boolean; error?: string };
 
+/**
+ * 示例配置(locale 无关,放代码常量):含花括号的 JSON 文案不能进 next-intl,
+ * 会被当成 ICU 占位符解析导致 MALFORMED_ARGUMENT、弹窗内容渲染失败
+ */
+const PLACEHOLDER_EXAMPLE =
+  '{"mcpServers": { "weather": { "command": "npx", "args": ["-y", "mcp-remote", "https://..."] } }}';
+
 type McpImportDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -137,7 +144,7 @@ export const McpImportDialog: FC<McpImportDialogProps> = ({
               setText(e.target.value);
               setOutcomes(null);
             }}
-            placeholder={t("mcpImportPlaceholder")}
+            placeholder={PLACEHOLDER_EXAMPLE}
             className="bg-background border-input focus-visible:border-primary focus-visible:ring-primary/30 min-h-32 rounded-md border px-2.5 py-2 font-mono text-xs outline-none focus-visible:ring-2"
             rows={7}
           />
@@ -151,7 +158,7 @@ export const McpImportDialog: FC<McpImportDialogProps> = ({
               {entries.map((entry) => (
                 <div
                   key={entry.name}
-                  className="border-border/40 flex items-start gap-2 rounded-md border px-2.5 py-2"
+                  className="border-border/40 flex min-w-0 items-start gap-2 rounded-md border px-2.5 py-2"
                 >
                   <CheckIcon className="text-emerald-500 mt-0.5 size-3.5 shrink-0" />
                   <span className="min-w-0 flex-1">
@@ -193,7 +200,7 @@ export const McpImportDialog: FC<McpImportDialogProps> = ({
               {skipped.map((item) => (
                 <div
                   key={item.name}
-                  className="border-border/40 flex items-start gap-2 rounded-md border px-2.5 py-2"
+                  className="border-border/40 flex min-w-0 items-start gap-2 rounded-md border px-2.5 py-2"
                 >
                   <XCircleIcon className="mt-0.5 size-3.5 shrink-0 text-amber-500" />
                   <span className="min-w-0 flex-1">

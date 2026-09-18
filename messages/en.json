@@ -138,7 +138,6 @@
     "mcpImport": "Import JSON",
     "mcpImportTitle": "Import MCP config",
     "mcpImportDesc": "Paste standard mcpServers JSON (Claude Desktop / Claude Code / Cursor format): url entries import directly; mcp-remote wrappers extract the remote URL; local stdio entries (command/args/env) import as-is and run on the server, which must have the referenced commands installed.",
-    "mcpImportPlaceholder": "{\"mcpServers\": { \"weather\": { \"command\": \"npx\", \"args\": [\"-y\", \"mcp-remote\", \"https://...\"] } }}",
     "mcpImportInvalidJson": "Invalid JSON — please check and try again",
     "mcpImportNoWrapper": "No mcpServers config found — paste the full JSON",
     "mcpImportNoEntries": "No importable entries",
