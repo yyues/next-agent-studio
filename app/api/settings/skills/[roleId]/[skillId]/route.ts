@@ -11,6 +11,7 @@ import { SkillDocModel } from "@/lib/models/skill-doc";
 import { blobDel, blobListPathnames } from "@/lib/blob";
 import { getAuthUserId } from "@/lib/auth-request";
 import { assertRoleAccess } from "@/lib/server-settings";
+import { invalidateSkillsCache } from "@/lib/skills-cache";
 
 export async function DELETE(
   req: Request,
@@ -50,6 +51,9 @@ export async function DELETE(
         // Blob 已不存在则忽略
       }
     }
+
+    // 内容已变化,逐出该角色的 skills 进程内缓存(聊天注入立即读到删除后的版本)
+    invalidateSkillsCache(roleId);
 
     return NextResponse.json({ deleted: true, skillId, roleId });
   } catch (error) {

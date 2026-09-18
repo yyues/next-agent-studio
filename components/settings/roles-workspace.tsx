@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { getClientRuntimeContext } from "@/lib/client-runtime-context";
+import { useRolesStore, type RoleSummary } from "@/lib/roles-store";
 import { cn } from "@/lib/utils";
 import { RoleDetail } from "@/components/settings/role-detail";
 
@@ -52,11 +53,19 @@ export const RolesWorkspace: FC<{ initialRoleId?: string }> = ({
   const tc = useTranslations("common");
   const router = useRouter();
 
-  const [roles, setRoles] = useState<RoleItem[]>([]);
-  const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(
     initialRoleId ?? null,
   );
+
+  /* 角色列表来自共享缓存(lib/roles-store):切标签 remount 后零请求,
+   * CRUD 由写接口响应直接驱动更新 */
+  const roles = useRolesStore((s) => s.roles);
+  const loading = useRolesStore((s) => s.loading);
+  const loadFailed = useRolesStore((s) => s.loadFailed);
+  const fetchedAt = useRolesStore((s) => s.fetchedAt);
+  const ensureRoles = useRolesStore((s) => s.ensureRoles);
+  const applyRoleCreated = useRolesStore((s) => s.applyRoleCreated);
+  const applyRoleDeleted = useRolesStore((s) => s.applyRoleDeleted);
 
   /* 新建角色弹窗(roleId 由服务端自动生成,表单不再收集) */
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -67,42 +76,34 @@ export const RolesWorkspace: FC<{ initialRoleId?: string }> = ({
     text: string;
   } | null>(null);
 
-  const loadRoles = useCallback(
-    async (opts?: { selectIfEmpty?: boolean }) => {
-      setLoading(true);
-      try {
-        const userId = getClientRuntimeContext().userId;
-        const res = await fetch(
-          `/api/settings/roles?userId=${encodeURIComponent(userId)}`,
-        );
-        if (!res.ok) throw new Error("load failed");
-        const data = (await res.json()) as { roles: RoleItem[] };
-        setRoles(data.roles ?? []);
-        // 首次加载未指定选中:优先当前会话角色,否则第一个
-        if (opts?.selectIfEmpty) {
-          setSelectedId((prev) => {
-            if (prev && data.roles?.some((r) => r.roleId === prev)) return prev;
-            const ctx = getClientRuntimeContext();
-            return (
-              data.roles.find((r) => r.roleId === ctx.roleId)?.roleId ??
-              data.roles[0]?.roleId ??
-              null
-            );
-          });
-        }
-      } catch {
-        setMessage({ type: "error", text: t("loadFailed") });
-      } finally {
-        setLoading(false);
-      }
-    },
-    [t],
-  );
+  useEffect(() => {
+    void ensureRoles();
+  }, [ensureRoles]);
 
   useEffect(() => {
-    void loadRoles({ selectIfEmpty: !initialRoleId });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (loadFailed) setMessage({ type: "error", text: t("loadFailed") });
+  }, [loadFailed, t]);
+
+  /* 列表到达后(首次或 CRUD 更新后)修正选中项:保留仍存在的当前选中,
+   * 否则依次回退 URL 深链 → 当前会话角色 → 第一个 */
+  useEffect(() => {
+    if (roles.length === 0) return;
+    setSelectedId((prev) => {
+      if (prev && roles.some((r) => r.roleId === prev)) return prev;
+      if (initialRoleId && roles.some((r) => r.roleId === initialRoleId)) {
+        return initialRoleId;
+      }
+      const ctx = getClientRuntimeContext();
+      return (
+        roles.find((r) => r.roleId === ctx.roleId)?.roleId ??
+        roles[0]?.roleId ??
+        null
+      );
+    });
+  }, [roles, initialRoleId]);
+
+  /* 首次回源完成前显示 loading;失败后不空转 spinner(展示错误横幅) */
+  const listLoading = loading || (fetchedAt === null && !loadFailed);
 
   /* 选中同步 URL(replace 不产生历史噪音,刷新/分享仍可还原) */
   const select = useCallback(
@@ -140,10 +141,10 @@ export const RolesWorkspace: FC<{ initialRoleId?: string }> = ({
         const err = (await res.json()) as { error?: string };
         throw new Error(err.error || t("saveFailed"));
       }
-      const data = (await res.json()) as { role: { roleId: string } };
+      const data = (await res.json()) as { role: RoleSummary };
       setDialogOpen(false);
       setForm(emptyForm);
-      await loadRoles();
+      applyRoleCreated(data.role);
       select(data.role.roleId);
     } catch (error) {
       setMessage({
@@ -155,10 +156,13 @@ export const RolesWorkspace: FC<{ initialRoleId?: string }> = ({
     }
   };
 
-  const onDeleted = useCallback(() => {
-    setSelectedId(null);
-    void loadRoles({ selectIfEmpty: true });
-  }, [loadRoles]);
+  const onDeleted = useCallback(
+    (deletedRoleId: string) => {
+      setSelectedId(null);
+      applyRoleDeleted(deletedRoleId);
+    },
+    [applyRoleDeleted],
+  );
 
   const builtin = roles.filter((r) => builtinRoleIds.has(r.roleId));
   const custom = roles.filter((r) => !builtinRoleIds.has(r.roleId));
@@ -224,7 +228,7 @@ export const RolesWorkspace: FC<{ initialRoleId?: string }> = ({
             {t("create")}
           </Button>
 
-          {loading ? (
+          {listLoading ? (
             <div className="text-muted-foreground flex items-center gap-2 py-8 text-sm">
               <Loader2Icon className="size-4 animate-spin" />
               {tc("loading")}

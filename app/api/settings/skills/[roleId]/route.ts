@@ -26,6 +26,7 @@ import { SkillDocModel } from "@/lib/models/skill-doc";
 import { blobPut, blobListPathnames, blobDel } from "@/lib/blob";
 import { mapWithConcurrency } from "@/lib/utils";
 import { parseFrontmatter } from "@/lib/skills";
+import { invalidateSkillsCache } from "@/lib/skills-cache";
 
 const SKILLS_ROOT = resolve(process.cwd(), "skills");
 
@@ -235,6 +236,9 @@ export async function POST(
       },
       { upsert: true, returnDocument: "after", setDefaultsOnInsert: true },
     );
+
+    // 内容已变化,逐出该角色的 skills 进程内缓存(聊天注入立即读到新版本)
+    invalidateSkillsCache(roleId);
 
     return NextResponse.json({
       skillId,

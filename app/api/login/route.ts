@@ -42,7 +42,8 @@ export async function POST(req: Request) {
     });
 
     return NextResponse.json({ ok: true, email });
-  } catch {
+  } catch (error) {
+    console.error("[/api/login]", error);
     return NextResponse.json({ error: "SERVER_ERROR" }, { status: 500 });
   }
 }

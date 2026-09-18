@@ -24,6 +24,7 @@ import {
   RUNTIME_CONTEXT_UPDATED_EVENT,
   getClientRuntimeContext,
 } from "@/lib/client-runtime-context";
+import { useRolesStore } from "@/lib/roles-store";
 import {
   ActionBarMorePrimitive,
   ActionBarPrimitive,
@@ -203,35 +204,20 @@ const ThreadWelcome: FC = () => {
 };
 
 /**
- * 开场建议问题:按当前角色从 /api/settings/roles 拉取(角色详情里可编辑),
- * 点击即作为用户消息发送。仅在新会话且输入框为空时展示;
- * 订阅角色变化(对话内切换角色后重新拉取新角色的建议)。
+ * 开场建议问题:直接读共享角色列表缓存(lib/roles-store)中当前角色的
+ * suggestions 字段(角色详情里可编辑),点击即作为用户消息发送。
+ * 仅在新会话且输入框为空时展示;订阅角色变化(对话内切换角色后展示新角色的建议)。
  */
 const ThreadSuggestions: FC = () => {
   const t = useTranslations("thread");
   const aui = useAui();
-  const [suggestions, setSuggestions] = useState<string[]>([]);
   const [roleId, setRoleId] = useState(() => getClientRuntimeContext().roleId);
+  const roles = useRolesStore((s) => s.roles);
+  const ensureRoles = useRolesStore((s) => s.ensureRoles);
 
   useEffect(() => {
-    let cancelled = false;
-    const userId = getClientRuntimeContext().userId;
-    void (async () => {
-      try {
-        const res = await fetch(
-          `/api/settings/roles/${encodeURIComponent(roleId)}?userId=${encodeURIComponent(userId)}`,
-        );
-        if (!res.ok) return;
-        const data = (await res.json()) as { role?: { suggestions?: string[] } };
-        if (!cancelled) setSuggestions(data.role?.suggestions ?? []);
-      } catch {
-        // 建议问题加载失败静默忽略,不影响会话
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [roleId]);
+    void ensureRoles();
+  }, [ensureRoles]);
 
   useEffect(() => {
     const onUpdate = () => setRoleId(getClientRuntimeContext().roleId);
@@ -239,6 +225,9 @@ const ThreadSuggestions: FC = () => {
     return () =>
       window.removeEventListener(RUNTIME_CONTEXT_UPDATED_EVENT, onUpdate);
   }, []);
+
+  const suggestions =
+    roles.find((r) => r.roleId === roleId)?.suggestions ?? [];
 
   if (suggestions.length === 0) return null;
 

@@ -21,6 +21,7 @@ import { connectToMongo } from "@/lib/mongodb";
 import { SkillDocModel } from "@/lib/models/skill-doc";
 import { blobGetText, blobListPathnames, blobDel } from "@/lib/blob";
 import { mapWithConcurrency } from "@/lib/utils";
+import { invalidateSkillsCache } from "@/lib/skills-cache";
 
 // 项目根目录下的 skills 文件夹
 const SKILLS_ROOT = resolve(process.cwd(), "skills");
@@ -30,6 +31,8 @@ const SKILLS_ROOT = resolve(process.cwd(), "skills");
  * 内置 skill（仓库提交）不在 Blob/DB 中，不受影响。
  */
 export async function removeRoleSkillDir(roleId: string): Promise<void> {
+  // skills 全量删除,先逐出进程内缓存(此后任何读取都回源为空)
+  invalidateSkillsCache(roleId);
   try {
     await connectToMongo();
     await SkillDocModel.deleteMany({ roleId });

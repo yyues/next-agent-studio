@@ -109,6 +109,9 @@ export async function connectToMongo() {
     cached.promise = mongoose.connect(uri, {
       bufferCommands: false,
     }).catch((error: unknown) => {
+      // Clear the cached promise so a later request retries the connection
+      // instead of rethrowing the same rejection until the process restarts.
+      cached.promise = null;
       const message = error instanceof Error ? error.message : String(error);
       if (message.includes("requires authentication") || message.includes("Unauthorized")) {
         throw new Error(

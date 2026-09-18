@@ -18,8 +18,9 @@ export async function GET(req: Request) {
     return NextResponse.json({
       userId,
       currentRoleId: settings.currentRoleId,
-      roles: settings.roles,
-      availableSkillIds: settings.availableSkillIds,
+      // systemPrompt 全文只有详情端点需要;列表消费方只用摘要字段,
+      // 不传输可显著减小 payload(角色多时尤其明显)
+      roles: settings.roles.map(({ systemPrompt: _systemPrompt, ...rest }) => rest),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to read role settings.";

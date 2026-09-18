@@ -8,10 +8,10 @@ import { RoleProfileModel } from "@/lib/models/role-profile";
 import { UserSettingModel } from "@/lib/models/user-setting";
 import { RoleResourceModel } from "@/lib/models/role-resource";
 import {
-  loadSkillsByRoleId,
   removeRoleSkillDir,
-  getAvailableSkillIds,
 } from "@/lib/skills";
+import { loadSkillsByRoleIdCached } from "@/lib/skills-cache";
+import { SkillDocModel } from "@/lib/models/skill-doc";
 import { removeRoleResourceDir } from "@/lib/resources";
 import { encryptSecret, decryptSecret } from "@/lib/secret-crypto";
 
@@ -623,7 +623,6 @@ export async function getRoleSettings(userId: string) {
     return {
       currentRoleId,
       roles,
-      availableSkillIds: await getAvailableSkillIds(currentRoleId),
     };
   } catch (error) {
     console.warn(
@@ -633,17 +632,19 @@ export async function getRoleSettings(userId: string) {
     return {
       currentRoleId: "general",
       roles: defaultRoleProfiles,
-      availableSkillIds: await getAvailableSkillIds("general"),
     };
   }
 }
 
 export async function setCurrentRole(userId: string, roleId: string) {
-  const roles = await getRoleSettings(userId);
-  const roleExists = roles.roles.some(
-    (role) => role.roleId === roleId && role.enabled,
-  );
-  if (!roleExists) {
+  await connectToMongo();
+
+  // 单查校验(库文档覆盖内置默认;不再整跑 getRoleSettings 省一轮 Mongo 往返)
+  const doc = await RoleProfileModel.findOne({ userId, roleId }).lean();
+  const enabled = doc
+    ? Boolean(doc.enabled)
+    : defaultRoleProfiles.find((r) => r.roleId === roleId)?.enabled === true;
+  if (!enabled) {
     throw new Error("Invalid roleId.");
   }
 
@@ -707,9 +708,9 @@ export async function resolveRuntimeConfig(input: {
     roleSettings.roles.find((item) => item.roleId === roleId && item.enabled) ??
     roleSettings.roles[0];
 
-  // const validSkillIds = role.skillIds.filter((id) => availableSkillIds.includes(id));
-  // 按角色加载 skills（从 skills/{roleId}/ 目录扫描）
-  const loadedSkills = await loadSkillsByRoleId(roleId);
+    // const validSkillIds = role.skillIds.filter((id) => availableSkillIds.includes(id));
+    // 按角色加载 skills(进程内 TTL 缓存,命中时聊天消息不再回源 Blob)
+    const loadedSkills = await loadSkillsByRoleIdCached(roleId);
   // 显式 /命令 调用 → 仅注入命中技能(显式优先);未使用 / 时保持全量注入
   const explicitCommands = (input.invokedSkillCommands ?? []).map((c) =>
     c.toLowerCase(),
@@ -890,16 +891,20 @@ export async function getRoleById(userId: string, roleId: string) {
 
   if (!role) throw new Error("Role not found.");
 
-  const loadedSkills = await loadSkillsByRoleId(roleId);
-  const resources = await RoleResourceModel.find({ roleId }).lean();
+  // 只查 SkillDoc 元数据,不读 Blob 全文(列表展示字段全够;
+  // 全文仅聊天注入时经 loadSkillsByRoleIdCached 读取并缓存)
+  const [skillDocs, resources] = await Promise.all([
+    SkillDocModel.find({ roleId, enabled: true }).lean(),
+    RoleResourceModel.find({ roleId }).lean(),
+  ]);
 
   return {
     role,
-    skills: loadedSkills.map((s) => ({
-      skillId: s.id,
-      title: s.title,
-      description: s.description ?? s.instructions?.slice(0, 120) ?? "",
-      version: s.version,
+    skills: skillDocs.map((d) => ({
+      skillId: d.skillId,
+      title: d.title,
+      description: d.description ?? "",
+      version: d.version,
     })),
     resources: resources.map((r) => ({
       resourceId: r.resourceId,

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type FC } from "react";
 import { useTranslations } from "next-intl";
 import { getClientRuntimeContext } from "@/lib/client-runtime-context";
+import { useRolesStore, type RoleSummary } from "@/lib/roles-store";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -140,8 +141,8 @@ function uploadFileWithProgress(
 export type RoleDetailProps = {
   /** 当前编辑的角色 id(由工作区左栏选中驱动) */
   roleId: string;
-  /** 角色被删除后回调(工作区清空选中并刷新列表) */
-  onDeleted?: () => void;
+  /** 角色被删除后回调(工作区清空选中并同步共享缓存) */
+  onDeleted?: (roleId: string) => void;
   /** 移动端"返回列表"(桌面双栏常驻,不渲染) */
   onMobileBack?: () => void;
 };
@@ -157,6 +158,7 @@ export const RoleDetail: FC<RoleDetailProps> = ({
   const [detail, setDetail] = useState<RoleDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const applyRoleUpdated = useRolesStore((s) => s.applyRoleUpdated);
 
   /* auto-save state */
   const [saveStatus, setSaveStatus] = useState<
@@ -268,6 +270,9 @@ export const RoleDetail: FC<RoleDetailProps> = ({
           },
         );
         if (!res.ok) throw new Error("save failed");
+        // 用服务端返回的最新角色同步共享缓存(列表/开场建议立即反映编辑)
+        const data = (await res.json()) as { role: RoleSummary };
+        applyRoleUpdated(data.role);
         setSaveStatus("saved");
         setTimeout(() => setSaveStatus("idle"), 2000);
       } catch {
@@ -301,7 +306,7 @@ export const RoleDetail: FC<RoleDetailProps> = ({
         const err = (await res.json()) as { error?: string };
         throw new Error(err.error || t("deleteFailed"));
       }
-      onDeleted?.();
+      onDeleted?.(roleId);
     } catch {
       setError(t("deleteFailed"));
     } finally {
