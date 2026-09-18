@@ -70,7 +70,7 @@
     "genDocPreview": "预览",
     "genDocDownload": "下载",
     "genDocTitle": "AI 生成的文档",
-    "sendSuggestion": "发送"
+    "insertSuggestion": "填入输入框"
   },
   "settings": {
     "title": "模型供应商",

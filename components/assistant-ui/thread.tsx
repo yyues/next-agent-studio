@@ -26,6 +26,10 @@ import {
 } from "@/lib/client-runtime-context";
 import { useRolesStore } from "@/lib/roles-store";
 import {
+  ComposerSuggestionBridge,
+  insertSuggestionChip,
+} from "@/components/assistant-ui/composer-suggestion-bridge";
+import {
   ActionBarMorePrimitive,
   ActionBarPrimitive,
   AuiIf,
@@ -205,12 +209,12 @@ const ThreadWelcome: FC = () => {
 
 /**
  * 开场建议问题:直接读共享角色列表缓存(lib/roles-store)中当前角色的
- * suggestions 字段(角色详情里可编辑),点击即作为用户消息发送。
- * 仅在新会话且输入框为空时展示;订阅角色变化(对话内切换角色后展示新角色的建议)。
+ * suggestions 字段(角色详情里可编辑)。点击不直接发送——像 /命令 一样
+ * 以内联 chip 填入输入框,用户可续写补充后再发送(chip 文本发送时并入
+ * 消息纯文本)。仅在新会话且输入框为空时展示;订阅角色变化同步。
  */
 const ThreadSuggestions: FC = () => {
   const t = useTranslations("thread");
-  const aui = useAui();
   const [roleId, setRoleId] = useState(() => getClientRuntimeContext().roleId);
   const roles = useRolesStore((s) => s.roles);
   const ensureRoles = useRolesStore((s) => s.ensureRoles);
@@ -238,13 +242,8 @@ const ThreadSuggestions: FC = () => {
           key={text}
           variant="ghost"
           className="aui-thread-welcome-suggestion aui-lift text-foreground hover:bg-muted hover:shadow-md border-border/60 fade-in slide-in-from-bottom-2 animate-in h-auto gap-1.5 rounded-full border px-3.5 py-1.5 text-sm font-normal whitespace-nowrap fill-mode-both duration-200 active:scale-[0.98] motion-reduce:transition-none"
-          title={t("sendSuggestion")}
-          onClick={() =>
-            aui.thread.append({
-              role: "user",
-              content: [{ type: "text", text }],
-            })
-          }
+          title={t("insertSuggestion")}
+          onClick={() => insertSuggestionChip(text)}
         >
           {text}
         </Button>
@@ -278,8 +277,10 @@ const Composer: FC = () => {
               directiveChip={LexicalSlashChip}
               onKeyDown={inputHistory.onKeyDown}
             >
-              {/* chip 插入末尾时补尾随空格,光标不贴边 */}
+              {/* chip 插入末尾时补尾随空格,光标不贴边;
+                  建议 chip 外部插入桥(ThreadSuggestions 点击填入) */}
               <ChipSpacingPlugin />
+              <ComposerSuggestionBridge />
             </LexicalComposerInput>
             <ComposerAction />
           </div>
@@ -454,7 +455,7 @@ const AssistantMessage: FC = () => {
     >
       <div
         data-slot="aui_assistant-message-content"
-        className="text-foreground px-2 leading-relaxed wrap-break-word"
+        className="text-foreground flex flex-col px-2 leading-relaxed wrap-break-word"
       >
         <AssistantThinking />
         <MessagePrimitive.Parts>
@@ -463,17 +464,21 @@ const AssistantMessage: FC = () => {
               return <ReasoningBlock text={part.text} />;
             if (part.type === "text") return <StreamdownText />;
             if (part.type === "tool-call") {
-              // 文件生成工具族:专用渲染器(生成中/完成的文档 tile + 预览/下载)
+              // 文件生成工具族:专用渲染器(生成中/完成的文档 tile + 预览/下载)。
+              // parts 按时间序渲染而工具先于文本完成,卡片会插在回复中间;
+              // order-last 让其固定展示在全部文本之后(先说明后交付)
               if (
                 part.toolName === "generate_document" ||
                 part.toolName === "generate_spreadsheet" ||
                 part.toolName === "generate_presentation"
               )
                 return (
-                  <GenerateDocumentResult
-                    args={part.args}
-                    result={part.result ?? null}
-                  />
+                  <div className="order-last">
+                    <GenerateDocumentResult
+                      args={part.args}
+                      result={part.result ?? null}
+                    />
+                  </div>
                 );
               return part.toolUI ?? <ToolFallback {...part} />;
             }

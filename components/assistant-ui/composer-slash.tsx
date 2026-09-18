@@ -114,7 +114,7 @@ export const ComposerSlash: FC = () => {
 
 /**
  * LexicalComposerInput 的内联命令 chip:
- * 复用对话历史的 CommandChip 样式(技能主色/MCP teal,图标+配色双区分)。
+ * 复用对话历史的 CommandChip 样式(技能主色/MCP teal/建议 violet,图标+配色双区分)。
  * 附加逻辑边距:与光标及前后文字留出呼吸间隙,不紧贴。
  */
 export const LexicalSlashChip: FC<{
@@ -123,7 +123,13 @@ export const LexicalSlashChip: FC<{
   label: string;
 }> = ({ directiveType, label }) => (
   <CommandChip
-    type={directiveType === "mcp" ? "mcp" : "skill"}
+    type={
+      directiveType === "mcp"
+        ? "mcp"
+        : directiveType === "suggestion"
+          ? "suggestion"
+          : "skill"
+    }
     label={label}
     variant="history"
   />

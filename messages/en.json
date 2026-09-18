@@ -70,7 +70,7 @@
     "genDocPreview": "Preview",
     "genDocDownload": "Download",
     "genDocTitle": "AI-generated document",
-    "sendSuggestion": "Send"
+    "insertSuggestion": "Add to composer"
   },
   "settings": {
     "title": "Model Providers",
