@@ -37,12 +37,13 @@ export class UploadRejected extends Error {
   }
 }
 
-/** XHR 上传:fetch 拿不到 upload progress,用 xhr.upload.onprogress 回传字节百分比 */
+/** XHR 上传:fetch 拿不到 upload progress,用 xhr.upload.onprogress 回传字节百分比。
+ * 成功时 resolve 响应体(资源上传含 warnings 等字段,技能上传忽略即可)。 */
 export function uploadFileWithProgress(
   url: string,
   file: File,
   onProgress: (percent: number, phase: UploadPhase) => void,
-): Promise<void> {
+): Promise<{ warnings?: string[] } | undefined> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", url);
@@ -58,7 +59,7 @@ export function uploadFileWithProgress(
     xhr.upload.onload = () => onProgress(100, "processing");
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {
-        resolve();
+        resolve(xhr.response ?? undefined);
         return;
       }
       const body = (xhr.response ?? {}) as {

@@ -15,7 +15,15 @@ export type RetrievedChunk = {
   fileName: string;
   resourceId: string;
   score: number;
+  /** PDF 切片的页码范围(文本类切片无) */
+  pageStart?: number;
+  pageEnd?: number;
+  /** 来自角色标记为"以此为准"的权威资源 */
+  authoritative?: boolean;
 };
+
+/** 权威资源切片的相似度加成:只翻转接近的得分,不把无关切片顶上来 */
+const AUTHORITY_SCORE_BOOST = 0.05;
 
 /**
  * 余弦相似度。向量长度一致时 O(n)。
@@ -36,29 +44,45 @@ export function cosineSimilarity(a: number[], b: number[]): number {
 
 /**
  * 取相似度 Top-K 切片。低于 minScore 的会被过滤。
+ * authoritativeResourceId 对应资源的切片得分加成(同主题多版本时权威优先,
+ * 加成幅度小,不影响跨主题的自然排序)。
  */
 export async function retrieveTopChunks(
   roleId: string,
   queryVector: number[],
-  options?: { topK?: number; minScore?: number },
+  options?: {
+    topK?: number;
+    minScore?: number;
+    authoritativeResourceId?: string | null;
+  },
 ): Promise<RetrievedChunk[]> {
   const topK = options?.topK ?? 5;
   const minScore = options?.minScore ?? 0.2;
+  const authorityId = options?.authoritativeResourceId ?? null;
 
   await connectToMongo();
   const chunks = await ResourceChunkModel.find({ roleId })
-    .select("content fileName resourceId embedding -_id")
+    .select("content fileName resourceId pageStart pageEnd embedding -_id")
     .lean();
 
   if (chunks.length === 0) return [];
 
   const scored = chunks
-    .map((c) => ({
-      content: c.content,
-      fileName: c.fileName,
-      resourceId: c.resourceId,
-      score: cosineSimilarity(queryVector, c.embedding ?? []),
-    }))
+    .map((c) => {
+      const authoritative = authorityId !== null && c.resourceId === authorityId;
+      const score =
+        cosineSimilarity(queryVector, c.embedding ?? []) +
+        (authoritative ? AUTHORITY_SCORE_BOOST : 0);
+      return {
+        content: c.content,
+        fileName: c.fileName,
+        resourceId: c.resourceId,
+        pageStart: c.pageStart ?? undefined,
+        pageEnd: c.pageEnd ?? undefined,
+        authoritative: authoritative || undefined,
+        score,
+      };
+    })
     .filter((c) => c.score >= minScore)
     .sort((a, b) => b.score - a.score)
     .slice(0, topK);

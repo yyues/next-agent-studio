@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import {
   ArrowLeftIcon,
+  CrownIcon,
   GlobeIcon,
   LinkIcon,
   ListPlusIcon,
@@ -58,6 +59,10 @@ type ResourceInfo = {
   resourceId: string;
   fileName: string;
   filePath: string;
+  /** 索引警告(如 scanned_pdf),空串为正常 */
+  indexWarning?: string;
+  /** "以此为准"权威标记(每角色独占一个) */
+  authoritative?: boolean;
   createdAt?: string;
 };
 
@@ -191,7 +196,7 @@ export const RoleDetail: FC<RoleDetailProps> = ({
   /* upload state */
   const [upload, setUpload] = useState<UploadState | null>(null);
   const [uploadNotice, setUploadNotice] = useState<{
-    type: "success" | "error";
+    type: "success" | "error" | "warning";
     text: string;
   } | null>(null);
   const [overwriteTarget, setOverwriteTarget] = useState<{
@@ -352,14 +357,24 @@ export const RoleDetail: FC<RoleDetailProps> = ({
       setUpload({ kind, fileName: file.name, percent: 0, phase: "transferring" });
       setUploadNotice(null);
       try {
-        await uploadFileWithProgress(url, file, (percent, phase) =>
+        const body = await uploadFileWithProgress(url, file, (percent, phase) =>
           setUpload((prev) => (prev ? { ...prev, percent, phase } : prev)),
         );
-        setUploadNotice({ type: "success", text: t("uploadSuccess") });
-        setTimeout(
-          () => setUploadNotice((n) => (n?.type === "success" ? null : n)),
-          4000,
-        );
+        if (kind === "resource" && body?.warnings?.length) {
+          // 上传成功但未能建索引(扫描件/超页数):警示但不按失败处理
+          setUploadNotice({ type: "warning", text: t("resourceIndexWarning") });
+          setTimeout(
+            () =>
+              setUploadNotice((n) => (n?.type === "warning" ? null : n)),
+            8000,
+          );
+        } else {
+          setUploadNotice({ type: "success", text: t("uploadSuccess") });
+          setTimeout(
+            () => setUploadNotice((n) => (n?.type === "success" ? null : n)),
+            4000,
+          );
+        }
         await loadDetail({ silent: true });
       } catch (e) {
         if (e instanceof UploadRejected) {
@@ -493,6 +508,33 @@ export const RoleDetail: FC<RoleDetailProps> = ({
     }
   };
 
+  /** 设置/取消"以此为准"权威标记(每角色独占;取消时传 false) */
+  const handleToggleAuthoritative = async (
+    resourceId: string,
+    next: boolean,
+  ) => {
+    try {
+      const res = await fetch(
+        `/api/settings/roles/${encodeURIComponent(roleId)}/resources/${encodeURIComponent(resourceId)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ authoritative: next }),
+        },
+      );
+      if (!res.ok) {
+        const err = (await res.json()) as { error?: string };
+        throw new Error(err.error || t("saveFailed"));
+      }
+      await loadDetail({ silent: true });
+    } catch (e) {
+      setUploadNotice({
+        type: "error",
+        text: e instanceof Error ? e.message : t("saveFailed"),
+      });
+    }
+  };
+
   /* ----- mcp handlers ----- */
 
   const loadMcpServers = useCallback(async () => {
@@ -528,14 +570,49 @@ export const RoleDetail: FC<RoleDetailProps> = ({
     setMcpDialogOpen(true);
   };
 
-  /** headers/env 文本域按 "Key: Value" 每行一条解析 */
+  /** 去掉键/值两端的包裹引号(JSON 风格输入会带上) */
+  const stripWrappingQuotes = (s: string) => {
+    const t = s.trim();
+    if (
+      t.length >= 2 &&
+      ((t.startsWith('"') && t.endsWith('"')) ||
+        (t.startsWith("'") && t.endsWith("'")))
+    )
+      return t.slice(1, -1).trim();
+    return t;
+  };
+
+  /**
+   * headers/env 文本域解析:支持 "Key: Value" 每行一条,或整体 JSON 对象
+   * (常见于从接口文档/网关控制台复制);键值两端的包裹引号会被剥掉,
+   * 避免出现 Headers.append: ""authorization"" is an invalid header name
+   */
   const parseHeaders = (raw: string): Record<string, string> => {
     const headers: Record<string, string> = {};
-    for (const line of raw.split("\n")) {
+    const text = raw.trim();
+    if (!text) return headers;
+
+    if (text.startsWith("{")) {
+      try {
+        const obj = JSON.parse(text) as Record<string, unknown>;
+        if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+          for (const [k, v] of Object.entries(obj)) {
+            const key = stripWrappingQuotes(k);
+            const value = stripWrappingQuotes(String(v ?? ""));
+            if (key && value) headers[key] = value;
+          }
+          return headers;
+        }
+      } catch {
+        // JSON 解析失败 → 回退按行解析
+      }
+    }
+
+    for (const line of text.split("\n")) {
       const idx = line.indexOf(":");
       if (idx <= 0) continue;
-      const key = line.slice(0, idx).trim();
-      const value = line.slice(idx + 1).trim();
+      const key = stripWrappingQuotes(line.slice(0, idx));
+      const value = stripWrappingQuotes(line.slice(idx + 1));
       if (key && value) headers[key] = value;
     }
     return headers;
@@ -769,7 +846,9 @@ export const RoleDetail: FC<RoleDetailProps> = ({
               "mb-4 rounded-md px-3 py-2 text-xs",
               uploadNotice.type === "success"
                 ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                : "bg-destructive/10 text-destructive",
+                : uploadNotice.type === "warning"
+                  ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                  : "bg-destructive/10 text-destructive",
             )}
           >
             {uploadNotice.text}
@@ -980,11 +1059,11 @@ export const RoleDetail: FC<RoleDetailProps> = ({
 
         {/* resources card */}
         <section className="border-border/60 bg-card rounded-lg border p-5">
-          <div className="mb-4 flex items-center justify-between">
+          <div className="mb-1 flex items-center justify-between">
             <h2 className="text-sm font-medium">{t("resources")}</h2>
             {!readonly && (
               <FilePickerButton
-                accept=".zip"
+                accept=".pdf,.md,.txt"
                 onSelect={handleResourceUpload}
                 label={t("uploadResource")}
                 disabled={!!upload}
@@ -992,6 +1071,9 @@ export const RoleDetail: FC<RoleDetailProps> = ({
               />
             )}
           </div>
+          <p className="text-muted-foreground mb-4 text-xs">
+            {t("resourceHint")}
+          </p>
           {upload?.kind === "resource" && (
             <UploadProgress upload={upload} t={t} />
           )}
@@ -1006,6 +1088,23 @@ export const RoleDetail: FC<RoleDetailProps> = ({
                 >
                   <div className="min-w-0 flex-1">
                     <span className="text-sm font-medium">{r.fileName}</span>
+                    {r.authoritative && (
+                      <span
+                        className="ml-1.5 inline-flex items-center gap-0.5 rounded bg-chart-1/10 px-1.5 py-0.5 align-middle text-[10px] text-chart-1"
+                        title={t("resourceAuthoritativeHint")}
+                      >
+                        <CrownIcon className="size-2.5" />
+                        {t("resourceAuthoritative")}
+                      </span>
+                    )}
+                    {r.indexWarning && (
+                      <span
+                        className="ml-1.5 inline-flex rounded bg-amber-500/10 px-1.5 py-0.5 align-middle text-[10px] text-amber-600 dark:text-amber-400"
+                        title={t("resourceScanned")}
+                      >
+                        {t("resourceWarningBadge")}
+                      </span>
+                    )}
                     {r.createdAt && (
                       <p className="text-muted-foreground mt-0.5 text-xs">
                         {new Date(r.createdAt).toLocaleString()}
@@ -1013,13 +1112,42 @@ export const RoleDetail: FC<RoleDetailProps> = ({
                     )}
                   </div>
                   {readonly ? null : (
-                    <button
-                      type="button"
-                      onClick={() => setDeleteResourceTarget(r)}
-                      className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 inline-flex size-6 shrink-0 items-center justify-center rounded transition-colors"
-                    >
-                      <Trash2Icon className="size-3" />
-                    </button>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void handleToggleAuthoritative(
+                            r.resourceId,
+                            !r.authoritative,
+                          )
+                        }
+                        className={cn(
+                          "inline-flex size-6 items-center justify-center rounded transition-colors",
+                          r.authoritative
+                            ? "bg-chart-1/10 text-chart-1"
+                            : "text-muted-foreground hover:bg-chart-1/10 hover:text-chart-1",
+                        )}
+                        title={
+                          r.authoritative
+                            ? t("resourceUnsetAuthoritative")
+                            : t("resourceSetAuthoritative")
+                        }
+                        aria-label={
+                          r.authoritative
+                            ? t("resourceUnsetAuthoritative")
+                            : t("resourceSetAuthoritative")
+                        }
+                      >
+                        <CrownIcon className="size-3" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDeleteResourceTarget(r)}
+                        className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 inline-flex size-6 items-center justify-center rounded transition-colors"
+                      >
+                        <Trash2Icon className="size-3" />
+                      </button>
+                    </div>
                   )}
                 </div>
               ))}

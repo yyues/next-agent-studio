@@ -26,6 +26,7 @@ import {
 import { listGlobalSkillDocs } from "@/lib/skills";
 import { removeRoleResourceDir } from "@/lib/resources";
 import { encryptSecret, decryptSecret } from "@/lib/secret-crypto";
+import { cachedLoad, invalidateCache } from "@/lib/config-cache";
 
 export type ProviderSettings = {
   providerName: string;
@@ -290,44 +291,12 @@ function buildModel(config: ProviderSettings) {
 }
 
 export async function getProviderSettings(userId: string) {
+  // 进程内 TTL 缓存:chat 每轮都读,写路径(upsert*/delete*/setActive*)主动逐出。
+  // 回源失败(含 DB 瞬断)不缓存,直接走默认值降级
   try {
-    await connectToMongo();
-    await ensureProvidersMigrated(userId);
-
-    // 聊天供应商:激活的 entry,无则回退默认
-    const entries = await ProviderEntryModel.find({ userId }).lean();
-    const active =
-      entries.find((e) => e.active) ?? entries[0] ?? null;
-
-    const doc = await ProviderConfigModel.findOne({ userId }).lean();
-    // embedding 为全局内置配置,不随供应商切换
-    const embeddingModel =
-      doc?.embeddingModel || defaultProviderSettings.embeddingModel;
-    const embeddingBaseUrl = doc?.embeddingBaseUrl ?? "";
-    const embeddingApiKey = decryptSecret(doc?.embeddingApiKey ?? "");
-
-    const config: ProviderSettings = active
-      ? {
-          providerName: active.providerName || "openai-compatible",
-          baseUrl: active.baseUrl,
-          apiKey: decryptSecret(active.apiKey),
-          model: active.model,
-          embeddingModel,
-          embeddingBaseUrl,
-          embeddingApiKey,
-          temperature:
-            typeof active.temperature === "number"
-              ? active.temperature
-              : defaultProviderSettings.temperature,
-        }
-      : defaultProviderSettings;
-
-    return {
-      source: (active ? "user" : "default") as "user" | "default",
-      config,
-      maskedApiKey: maskApiKey(config.apiKey),
-      maskedEmbeddingApiKey: maskApiKey(embeddingApiKey),
-    };
+    return await cachedLoad("provider", userId, () =>
+      loadProviderSettingsFromDb(userId),
+    );
   } catch (error) {
     console.warn(
       "Failed to load provider settings from MongoDB. Using defaults.",
@@ -342,6 +311,46 @@ export async function getProviderSettings(userId: string) {
       ),
     };
   }
+}
+
+async function loadProviderSettingsFromDb(userId: string) {
+  await connectToMongo();
+  await ensureProvidersMigrated(userId);
+
+  // 聊天供应商:激活的 entry,无则回退默认
+  const entries = await ProviderEntryModel.find({ userId }).lean();
+  const active =
+    entries.find((e) => e.active) ?? entries[0] ?? null;
+
+  const doc = await ProviderConfigModel.findOne({ userId }).lean();
+  // embedding 为全局内置配置,不随供应商切换
+  const embeddingModel =
+    doc?.embeddingModel || defaultProviderSettings.embeddingModel;
+  const embeddingBaseUrl = doc?.embeddingBaseUrl ?? "";
+  const embeddingApiKey = decryptSecret(doc?.embeddingApiKey ?? "");
+
+  const config: ProviderSettings = active
+    ? {
+        providerName: active.providerName || "openai-compatible",
+        baseUrl: active.baseUrl,
+        apiKey: decryptSecret(active.apiKey),
+        model: active.model,
+        embeddingModel,
+        embeddingBaseUrl,
+        embeddingApiKey,
+        temperature:
+          typeof active.temperature === "number"
+            ? active.temperature
+            : defaultProviderSettings.temperature,
+      }
+    : defaultProviderSettings;
+
+  return {
+    source: (active ? "user" : "default") as "user" | "default",
+    config,
+    maskedApiKey: maskApiKey(config.apiKey),
+    maskedEmbeddingApiKey: maskApiKey(embeddingApiKey),
+  };
 }
 
 /* ---------- 多供应商 CRUD ---------- */
@@ -465,6 +474,7 @@ export async function upsertProviderEntry(
     { returnDocument: "after", upsert: true, setDefaultsOnInsert: true },
   ).lean();
 
+  invalidateCache("provider", userId);
   return doc;
 }
 
@@ -486,6 +496,7 @@ export async function deleteProviderEntry(userId: string, providerId: string) {
       );
     }
   }
+  invalidateCache("provider", userId);
   return { deleted: true };
 }
 
@@ -502,6 +513,7 @@ export async function setActiveProviderEntry(
 
   await ProviderEntryModel.updateMany({ userId }, { active: false });
   await ProviderEntryModel.updateOne({ userId, providerId }, { active: true });
+  invalidateCache("provider", userId);
   return { active: providerId };
 }
 
@@ -542,6 +554,7 @@ export async function upsertEmbeddingSettings(
     { upsert: true, returnDocument: "after", setDefaultsOnInsert: true },
   ).lean();
 
+  invalidateCache("provider", userId);
   return {
     model: defaultProviderSettings.embeddingModel,
     baseUrl: embeddingBaseUrl,
@@ -592,6 +605,7 @@ export async function upsertProviderSettings(
     throw new Error("Failed to save provider settings.");
   }
 
+  invalidateCache("provider", userId);
   const saved = { ...normalized };
 
   return {
@@ -651,45 +665,12 @@ async function seedDefaultRoles() {
   );
 }
 export async function getRoleSettings(userId: string) {
+  // 进程内 TTL 缓存:chat 每轮都读,写路径(setCurrentRole/create/update/delete)
+  // 主动逐出;回源失败不缓存,直接走默认值降级
   try {
-    await connectToMongo();
-
-    // 可见集合:自己的私有角色 + 内置单例(__builtin__) + 管理员发布的通用角色
-    const visibleFilter = visibleRoleFilter(userId);
-
-    // 两个读取并行;常态(已播种)不再执行两次播种写。
-    // currentRoleId 走原生集合:开发态热更新后 mongoose 注册表可能仍持有
-    // 旧 schema(无此字段),模型读写会把它静默剥离
-    const [accountRaw, dbRoleDocs] = await Promise.all([
-      userAccountsRaw()
-        .findOne({ email: userId }, { projection: { currentRoleId: 1 } })
-        .catch(() => null),
-      RoleProfileModel.find(visibleFilter).lean(),
-    ]);
-
-    let docs = dbRoleDocs;
-    const hasAllDefaults = defaultRoleProfiles.every((d) =>
-      docs.some((doc) => doc.roleId === d.roleId),
+    return await cachedLoad("roles", userId, () =>
+      loadRoleSettingsFromDb(userId),
     );
-    if (!hasAllDefaults) {
-      await seedDefaultRoles();
-      docs = await RoleProfileModel.find(visibleFilter).lean();
-    }
-
-    const roles = docs
-      .map((doc) => toRoleProfile(doc as Record<string, unknown>))
-      .sort((a, b) => a.priority - b.priority);
-
-    const roleIdSet = new Set(roles.map((r) => r.roleId));
-    const currentRoleId =
-      accountRaw?.currentRoleId && roleIdSet.has(accountRaw.currentRoleId)
-        ? accountRaw.currentRoleId
-        : "general";
-
-    return {
-      currentRoleId,
-      roles,
-    };
   } catch (error) {
     console.warn(
       "Failed to load role settings from MongoDB. Using defaults.",
@@ -700,6 +681,47 @@ export async function getRoleSettings(userId: string) {
       roles: defaultRoleProfiles,
     };
   }
+}
+
+async function loadRoleSettingsFromDb(userId: string) {
+  await connectToMongo();
+
+  // 可见集合:自己的私有角色 + 内置单例(__builtin__) + 管理员发布的通用角色
+  const visibleFilter = visibleRoleFilter(userId);
+
+  // 两个读取并行;常态(已播种)不再执行两次播种写。
+  // currentRoleId 走原生集合:开发态热更新后 mongoose 注册表可能仍持有
+  // 旧 schema(无此字段),模型读写会把它静默剥离
+  const [accountRaw, dbRoleDocs] = await Promise.all([
+    userAccountsRaw()
+      .findOne({ email: userId }, { projection: { currentRoleId: 1 } })
+      .catch(() => null),
+    RoleProfileModel.find(visibleFilter).lean(),
+  ]);
+
+  let docs = dbRoleDocs;
+  const hasAllDefaults = defaultRoleProfiles.every((d) =>
+    docs.some((doc) => doc.roleId === d.roleId),
+  );
+  if (!hasAllDefaults) {
+    await seedDefaultRoles();
+    docs = await RoleProfileModel.find(visibleFilter).lean();
+  }
+
+  const roles = docs
+    .map((doc) => toRoleProfile(doc as Record<string, unknown>))
+    .sort((a, b) => a.priority - b.priority);
+
+  const roleIdSet = new Set(roles.map((r) => r.roleId));
+  const currentRoleId =
+    accountRaw?.currentRoleId && roleIdSet.has(accountRaw.currentRoleId)
+      ? accountRaw.currentRoleId
+      : "general";
+
+  return {
+    currentRoleId,
+    roles,
+  };
 }
 
 export async function setCurrentRole(userId: string, roleId: string) {
@@ -726,6 +748,7 @@ export async function setCurrentRole(userId: string, roleId: string) {
     { $set: { currentRoleId: roleId } },
   );
 
+  invalidateCache("roles", userId);
   return {
     currentRoleId: roleId,
   };
@@ -885,6 +908,7 @@ export async function createRole(
     visibility: "private",
   });
 
+  invalidateCache("roles", userId);
   return toRoleProfile(doc.toObject() as Record<string, unknown>);
 }
 
@@ -979,6 +1003,11 @@ export async function updateRole(
   // 引用变化影响聊天注入的有效 skills,逐出该角色缓存
   if (update.skillIds !== undefined) invalidateSkillsCache(roleId);
 
+  // 角色列表/字段变化:逐出角色缓存;mcpRefs 变化影响所有引用方的
+  // 有效 MCP 列表(发布角色可被他人引用),全清 MCP 缓存
+  invalidateCache("roles", userId);
+  if (update.mcpRefs !== undefined) invalidateCache("mcp");
+
   return toRoleProfile(doc as Record<string, unknown>);
 }
 
@@ -1007,6 +1036,9 @@ export async function deleteRole(userId: string, roleId: string) {
   await removeRoleSkillDir(roleId);
   await removeRoleResourceDir(roleId);
   invalidateSkillsCache(roleId);
+  // removeRoleResourceDir 已逐出 rag-chunks;此处补角色列表与该角色的 MCP 缓存
+  invalidateCache("roles", userId);
+  invalidateCache("mcp", `${userId}/${roleId}`);
 
   return { deleted: true };
 }
@@ -1095,6 +1127,8 @@ export async function getRoleById(userId: string, roleId: string) {
       resourceId: r.resourceId,
       fileName: r.fileName,
       filePath: r.filePath,
+      indexWarning: r.indexWarning ?? "",
+      authoritative: r.authoritative ?? false,
       createdAt: r.createdAt,
     })),
   };

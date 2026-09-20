@@ -18,7 +18,7 @@
 
 ### 1.2 对话助手（运行时）输出准则
 - 角色由 `roleId` 决定：`role.systemPrompt` 是人格基线，必须优先遵循。
-- **RAG 上下文优先**：当 system prompt 中出现「从该角色知识库中检索到的相关参考资料」段时，优先据此回答；资料未涵盖的部分再依自身能力作答，不得编造资料里不存在的内容。
+- **RAG 资料优先**：`rag_search` 工具返回的资料切片（含来源文件与页码）优先据此回答并注明出处；资料未涵盖的部分再依自身能力作答，不得编造资料里不存在的内容。
 - **Skills 知识**：system prompt 中的「Active skills」段为该角色激活的能力说明与参考知识，按其约束产出。
 - **深度思考**：当 `deepThinking` 开启时，先简述思路、拆解关键问题，再逐步推演，最后给明确结论。
 - 工具调用由前端 `tools` 与角色 `toolToggles` 共同决定；未被开启的工具不得调用。
@@ -50,6 +50,7 @@
   3. `loadSkillsByRoleId(roleId)` 加载 skills，把 `title + instructions + knowledge` 合并成 skill 指令段；
   4. `systemPrompt = [role.systemPrompt, skillInstruction ? "Active skills:\n..." : ""].join("\n\n")`。
 - 返回 `{ model, provider, role, systemPrompt, temperature }`。
+- **配置读取走进程内 TTL 缓存**：`getProviderSettings` / `getRoleSettings` / `listEffectiveMcpServers` / `countRoleChunks` 经 [lib/config-cache.ts](file:///e:/Desktop/fe/agent-demo/lib/config-cache.ts) 的 `cachedLoad`（单实例、10 分钟滑动 TTL、inflight 去重、错误不缓存）；对应写路径（provider upsert/切换/删除、角色增删改/切换当前角色、MCP 增删/全局库/updateRole 的 mcpRefs、RAG 切片增删）成功后 `invalidateCache` 主动逐出，TTL 仅兜底。将来多实例部署换 Redis 只需改 config-cache 一个文件。
 
 ### 2.3 Skills 加载
 - 两来源合并（DB 上传项覆盖同 id 内置项）：
@@ -59,12 +60,12 @@
 - **Skills 是全量注入 system prompt，不走 RAG**（与 Resources 不同）。
 
 ### 2.4 RAG 检索（Resources）
-- 数据模型：`ResourceChunk`（`roleId` / `resourceId` / `fileName` / `chunkIndex` / `content` / `embedding: number[]` / `embeddingModel`）。
-- 切片：[lib/rag/chunking.ts](file:///e:/Desktop/fe/agent-demo/lib/rag/chunking.ts) 递归切分（段落 > 换行 > 句号 > 字符），~800 字符/片、150 重叠，零依赖。
+- 入口：单文件上传（`.pdf` / `.md` / `.txt`，≤20MB，不再接受 zip）；PDF 经 [lib/rag/pdf.ts](file:///e:/Desktop/fe/agent-demo/lib/rag/pdf.ts)（unpdf）逐页抽取文本，扫描件（平均每页 <20 有效字符）检测后跳过索引并回传警告。
+- 数据模型：`ResourceChunk`（`roleId` / `resourceId` / `fileName` / `chunkIndex` / `content` / `pageStart` / `pageEnd`（PDF 切片页码范围，文本类不写）/ `embedding: number[]` / `embeddingModel`）。
+- 切片：[lib/rag/chunking.ts](file:///e:/Desktop/fe/agent-demo/lib/rag/chunking.ts) 递归切分（段落 > 换行 > 中文句号 > 英文句号 > 分号 > 空格），~800 字符/片、150 重叠；`chunkPaginatedText` 为 PDF 做页感知切片（短页并入相邻片，切片携带页码）。
 - 向量化：[lib/rag/embeddings.ts](file:///e:/Desktop/fe/agent-demo/lib/rag/embeddings.ts) 用 provider 的 `embeddingBaseUrl/embeddingApiKey`（留空回退主 baseUrl/apiKey）构造 `createOpenAICompatible` → `.embeddingModel(embeddingModel)`，AI SDK v7 `embedMany`（`maxParallelCalls: 4`）/ `embed`。
-- 检索：[lib/rag/retrieve.ts](file:///e:/Desktop/fe/agent-demo/lib/rag/retrieve.ts) 按 `roleId` 拉全部切片，余弦相似度排序，取 Top-5（阈值 0.2）。
-- 上下文构建：[lib/rag/index.ts](file:///e:/Desktop/fe/agent-demo/lib/rag/index.ts) `getRagContext` —— 角色无切片则跳过（不花 embedding 费用），检索失败降级为空串。
-- 注入：聊天路由把 `getRagContext` 结果拼进 system prompt（位于 role systemPrompt 之后、客户端 system 之前）。
+- 检索：[lib/rag/retrieve.ts](file:///e:/Desktop/fe/agent-demo/lib/rag/retrieve.ts) 按 `roleId` 拉全部切片，余弦相似度排序，取 Top-K（默认 5，阈值 0.2）；角色可标记一份"以此为准"的权威资源（`RoleResource.authoritative`，每角色独占，`PATCH .../resources/[id]` 切换）——其切片得分 +0.05 加成、结果带 `[权威资料]` 标注。
+- 形态：**`rag_search` 工具按需检索**（非 system prompt 自动注入）——角色有切片才挂载该工具，模型判断与资料相关时调用，可用不同关键词多次检索；工具说明要求多来源信息冲突时并列说明差异并优先采信 `[权威资料]` 标注的来源。`searchRoleKnowledge` 失败降级为空结果；权威资源 id 经 config-cache 缓存（`rag-auth` ns，PATCH/删资源时逐出）。历史 zip 资源的存量切片仍可检索。
 
 ### 2.5 深度思考
 - [lib/reasoning.ts](file:///e:/Desktop/fe/agent-demo/lib/reasoning.ts) `resolveReasoningOptions` 按 provider family（OpenAI / Anthropic / 通用）解析原生 reasoning 参数。
@@ -101,11 +102,12 @@ lib/
   reasoning.ts                 # 深度思考 provider 适配
   blob.ts                      # Vercel Blob 封装（含本地回退）
   mongodb.ts                   # Mongo 连接（全局缓存）
+  config-cache.ts              # 配置类读取的进程内 TTL 缓存（provider/roles/mcp/rag-chunks）
   client-runtime-context.ts    # 客户端运行时上下文（userId/roleId/deepThinking）
   provider-storage.ts          # Provider 本地 AES-GCM 加密存储
   skills/                      # Skills 加载器
   resources/                   # Resources 目录管理
-  rag/                         # RAG：chunking / embeddings / retrieve / index
+  rag/                         # RAG：chunking / pdf 抽取 / embeddings / retrieve / index
   models/                      # Mongoose 模型
 components/
   chat/  settings/  ui/        # 按功能拆分
@@ -144,22 +146,24 @@ skills/{roleId}/{skillId}/     # 内置 skill（仓库提交）
    - `normalizeUserId` → `resolveRuntimeConfig({ userId, requestedRoleId: roleId })` 得 model/provider/role/systemPrompt/temperature；
    - `filterToolsByRole` 过滤工具；
    - `resolveReasoningOptions` 解析深度思考；
-   - `extractLastUserQuery(messages)` 取末条用户消息 → `getRagContext(role.roleId, query, provider)` 检索 RAG 切片；
-   - `mergedSystemPrompt = [systemPrompt, ragContext, system, deepThinkingInstruction].filter(Boolean).join("\n\n")`；
+   - `extractLastUserQuery(messages)` 取末条用户消息（斜杠命令与 MCP @提及解析用）；
+   - `countRoleChunks(roleId) > 0` 时在 tools 中挂载 `rag_search`（角色知识库按需检索）；
+   - `mergedSystemPrompt = [systemPrompt, mcpPromptSection, system, deepThinkingInstruction].filter(Boolean).join("\n\n")`；
    - `streamText({ model, messages, system, temperature, tools, providerOptions })` → `toUIMessageStreamResponse`。
 4. 前端 Thread 渲染流式 UIMessage；`sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls` 触发工具自动续跑。
 
 ### 4.2 资源上传与索引流程
-1. 角色管理详情页上传 zip → `POST /api/settings/roles/[roleId]/resources?userId=...`。
+1. 角色管理详情页上传单文件（`.pdf`/`.md`/`.txt`）→ `POST /api/settings/roles/[roleId]/resources?userId=...`。
 2. [resources/route.ts](file:///e:/Desktop/fe/agent-demo/app/api/settings/roles/[roleId]/resources/route.ts)：
-   - 内存解压 zip，MD5 去重，同名先清旧 Blob；
-   - 逐文件 `blobPut` 到 `resources/{roleId}/{resourceId}/{entryName}`；
-   - upsert `RoleResource` 元数据；
+   - 校验扩展名与大小（≤20MB，zip 一律 400 拒绝），MD5 去重，同名先清旧 Blob；
+   - `blobPut` 到 `resources/{roleId}/{resourceId}/{安全化文件名}`；
+   - upsert `RoleResource` 元数据（含 `indexWarning`）；
    - `getProviderSettings(userId)` 取 provider → `indexResourceFromBlob(roleId, resourceId, blobPrefix, provider.config)`：
-     - 列出 Blob 下可索引文本文件（按扩展名白名单）；
+     - 列出 Blob 下可索引文件（白名单 `.pdf`/`.md`/`.txt`）；
      - 先删旧切片（幂等）；
-     - `chunkText` 切片 → `embedTexts`（embedMany）→ `ResourceChunkModel.insertMany`；
-   - 索引失败不阻断上传，仅返回 `indexed: false`。
+     - PDF：`extractPdfPages` 逐页抽取 → `chunkPaginatedText` 页感知切片（带页码）；其余：`chunkText` 递归切片；
+     - `embedTexts`（embedMany）→ `ResourceChunkModel.insertMany`；
+   - 索引失败不阻断上传，仅返回 `indexed: false`；扫描件/超页数写入 `indexWarning` 并随响应 `warnings` 透传前端。
 3. 删资源：`DELETE .../resources/[resourceId]` 删 Blob + `RoleResource` 元数据 + `deleteResourceChunks(roleId, resourceId)`。
 4. 删角色：`removeRoleResourceDir(roleId)` 删 Blob + `RoleResource` + `deleteResourceChunks(roleId)`。
 

@@ -20,7 +20,11 @@ import {
 import { getAuthUserId } from "@/lib/auth-request";
 import { extractCommandTokens } from "@/lib/slash-directive";
 import { resolveReasoningOptions } from "@/lib/reasoning";
-import { getRagContext } from "@/lib/rag";
+import {
+  countRoleChunks,
+  searchRoleKnowledge,
+  formatSearchResults,
+} from "@/lib/rag";
 import {
   loadMcpToolsForChat,
   extractMcpMentions,
@@ -35,7 +39,7 @@ const MCP_WRITE_TOOL_RE =
   /(create|write|update|delete|remove|drop|insert|send|post|patch|rename|move|copy|edit|modify|cancel|submit|publish|deploy|reset|set|add|upload|execute|run|apply|approve|pay|transfer|close|open|start|stop|kill|restart)/i;
 
 /**
- * 从消息列表中提取最后一条用户消息的文本，作为 RAG 检索 query。
+ * 从消息列表中提取最后一条用户消息的文本，用于斜杠命令与 MCP @提及解析。
  */
 function extractLastUserQuery(messages: UIMessage[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -329,8 +333,8 @@ export async function POST(req: Request) {
     ? "在回答前请先进行深度思考与分步推理：先简述思路、拆解关键问题，再逐步推演，最后给出明确的最终结论。"
     : "";
 
-  // RAG：用末条用户消息检索该角色知识库切片，注入 system prompt。
-  // 角色无资源或检索失败均返回空串，不影响对话。
+  // RAG:角色有知识库切片时挂载 rag_search 工具,由模型按需检索
+  // (不再每轮自动检索注入 system prompt)。检索失败降级为不挂载。
   // MCP:加载角色配置的外部 MCP server 工具。消息中 @serverName 可强制启用;
   // "/server名称" 斜杠命令与 @ 提及同语义(未知名称不会命中任何 server,自然忽略)。
   // 未勾选任何 server 且无提及时,使用角色下所有 enabled 的 server。
@@ -340,8 +344,8 @@ export async function POST(req: Request) {
     serverSummaries: [],
     close: async () => undefined,
   };
-  // MCP 连接与 RAG 检索互不依赖,并行执行省一段串行等待
-  const [mcpLoaded, ragContext] = await Promise.all([
+  // MCP 连接与切片计数互不依赖,并行执行省一段串行等待
+  const [mcpLoaded, ragEnabled] = await Promise.all([
     loadMcpToolsForChat({
       userId: normalizedUserId,
       roleId: runtimeConfig.role.roleId,
@@ -357,13 +361,38 @@ export async function POST(req: Request) {
       console.warn("[chat] MCP tools load failed:", error);
       return undefined;
     }),
-    getRagContext(
-      runtimeConfig.role.roleId,
-      lastUserQuery,
-      runtimeConfig.provider,
-    ),
+    countRoleChunks(runtimeConfig.role.roleId)
+      .then((n) => n > 0)
+      .catch(() => false),
   ]);
   if (mcpLoaded) mcpBundle = mcpLoaded;
+
+  const ragSearchTool = tool({
+    description:
+      "检索当前角色知识库(用户上传的 PDF/Markdown/TXT 资料切片)。当用户问题可能涉及已上传的资料、需要引用资料原文或出处时调用;一次结果不理想可换关键词再次调用。返回带来源文件与页码的切片列表,引用时请注明出处。多个来源对同一问题给出不一致信息时,不要悄悄混合:并列说明各来源的说法(含来源与页码)并指出差异;带[权威资料]标注的来源为该角色指定的权威版本,优先采信。",
+    inputSchema: z.object({
+      query: z
+        .string()
+        .min(1)
+        .describe("检索关键词或问题,优先使用资料中可能出现的原词表述"),
+      topK: z
+        .number()
+        .int()
+        .min(1)
+        .max(8)
+        .optional()
+        .describe("返回条数,默认 5"),
+    }),
+    execute: async ({ query, topK }) => {
+      const hits = await searchRoleKnowledge(
+        runtimeConfig.role.roleId,
+        query,
+        runtimeConfig.provider,
+        topK ? { topK } : undefined,
+      );
+      return { results: formatSearchResults(hits) };
+    },
+  });
 
   const mcpPromptSection =
     mcpBundle.serverSummaries.length > 0
@@ -379,7 +408,6 @@ export async function POST(req: Request) {
 
   const mergedSystemPrompt = [
     runtimeConfig.systemPrompt,
-    ragContext,
     mcpPromptSection,
     system,
     deepThinkingInstruction,
@@ -397,6 +425,7 @@ export async function POST(req: Request) {
     tools: {
       ...frontendTools(activeTools),
       ...mcpBundle.tools,
+      ...(ragEnabled ? { rag_search: ragSearchTool } : {}),
       generate_document: generateDocumentTool,
       generate_spreadsheet: generateSpreadsheetTool,
       generate_presentation: generatePresentationTool,

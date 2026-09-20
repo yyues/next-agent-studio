@@ -22,6 +22,10 @@ const resourceChunkSchema = new Schema(
     chunkIndex: { type: Number, required: true },
     // 切片文本内容
     content: { type: String, required: true },
+    // PDF 切片覆盖的起始页码(1 起始);文本类切片与老数据不写
+    pageStart: { type: Number },
+    // PDF 切片覆盖的结束页码,与 pageStart 相同时为单页切片
+    pageEnd: { type: Number },
     // embedding 向量（维度由模型决定）
     embedding: { type: [Number], required: true },
     // 生成向量所用模型，便于模型切换后重建索引

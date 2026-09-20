@@ -271,7 +271,7 @@ function ToolFallbackArgs({
       className={cn("aui-tool-fallback-args", className)}
       {...props}
     >
-      <pre className="aui-tool-fallback-args-value bg-muted/50 text-foreground/90 rounded-md p-2.5 text-xs whitespace-pre-wrap">
+      <pre className="aui-tool-fallback-args-value bg-muted/50 text-foreground/90 rounded-md p-2.5 text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">
         {argsText}
       </pre>
     </div>
@@ -296,7 +296,7 @@ function ToolFallbackResult({
       <p className="aui-tool-fallback-result-header text-muted-foreground text-xs font-medium">
         Result:
       </p>
-      <pre className="aui-tool-fallback-result-content bg-muted/50 text-foreground/90 mt-1 rounded-md p-2.5 text-xs whitespace-pre-wrap">
+      <pre className="aui-tool-fallback-result-content bg-muted/50 text-foreground/90 mt-1 rounded-md p-2.5 text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">
         {typeof result === "string" ? result : JSON.stringify(result, null, 2)}
       </pre>
     </div>
@@ -615,6 +615,17 @@ function CopyTextButton({ text }: { text: string }) {
  * 工具调用详情弹窗:完整查看该次调用的参数与结果(卡片内折叠区只保留摘要,
  * 长内容在此滚动阅读/复制)。MCP 工具显示 server / tool 美化名。
  */
+/** 结果是紧凑 JSON 字符串时美化展示,否则原样返回(复制体验也更好) */
+function prettyIfJson(s: string): string {
+  const t = s.trim();
+  if (!t.startsWith("{") && !t.startsWith("[")) return s;
+  try {
+    return JSON.stringify(JSON.parse(t), null, 2);
+  } catch {
+    return s;
+  }
+}
+
 function ToolDetailDialog({
   open,
   onOpenChange,
@@ -636,7 +647,7 @@ function ToolDetailDialog({
     result === undefined
       ? null
       : typeof result === "string"
-        ? result
+        ? prettyIfJson(result)
         : JSON.stringify(result, null, 2);
   const error =
     status?.type === "incomplete" && status.error
@@ -662,7 +673,7 @@ function ToolDetailDialog({
               <p className="text-destructive text-xs font-semibold">
                 {t("toolError")}
               </p>
-              <pre className="bg-destructive/5 border-destructive/20 text-destructive mt-1 max-h-40 overflow-y-auto rounded-md border p-2.5 text-xs whitespace-pre-wrap">
+              <pre className="bg-destructive/5 border-destructive/20 text-destructive mt-1 max-h-40 overflow-y-auto rounded-md border p-2.5 text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">
                 {error}
               </pre>
             </div>
@@ -675,7 +686,7 @@ function ToolDetailDialog({
                 </p>
                 <CopyTextButton text={argsText} />
               </div>
-              <pre className="bg-muted/50 text-foreground/90 mt-1 max-h-56 overflow-y-auto rounded-md p-2.5 text-xs whitespace-pre-wrap">
+              <pre className="bg-muted/50 text-foreground/90 mt-1 max-h-56 overflow-y-auto rounded-md p-2.5 text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">
                 {argsText}
               </pre>
             </div>
@@ -688,7 +699,7 @@ function ToolDetailDialog({
                 </p>
                 <CopyTextButton text={resultText} />
               </div>
-              <pre className="bg-muted/50 text-foreground/90 mt-1 max-h-[26rem] overflow-y-auto rounded-md p-2.5 text-xs whitespace-pre-wrap">
+              <pre className="bg-muted/50 text-foreground/90 mt-1 max-h-[26rem] overflow-y-auto rounded-md p-2.5 text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">
                 {resultText}
               </pre>
             </div>

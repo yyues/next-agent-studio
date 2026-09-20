@@ -1,31 +1,57 @@
 /**
  * GET  /api/settings/roles/[roleId]/resources — 列出该角色所有 RAG 资料
- * POST /api/settings/roles/[roleId]/resources — 上传资料 zip 包
+ * POST /api/settings/roles/[roleId]/resources — 上传单个资料文件（.pdf/.md/.txt）
  *
  * 上传（Vercel Blob 方案，文件不落本地磁盘）：
- * 1. 内存解压 zip
+ * 1. 校验扩展名与大小（≤20MB），不再接受 zip 压缩包
  * 2. 计算 MD5 去重
- * 3. 逐文件 put 到 resources/{roleId}/{resourceId}/{entryName}
- * 4. 元数据（fileName/md5/blobPrefix）存 MongoDB
+ * 3. put 到 resources/{roleId}/{resourceId}/{安全化文件名}
+ * 4. 元数据（fileName/md5/blobPrefix/indexWarning）存 MongoDB
  */
 import { NextResponse } from "next/server";
 import { createHash } from "crypto";
-import AdmZip from "adm-zip";
 import { connectToMongo } from "@/lib/mongodb";
 import { RoleResourceModel } from "@/lib/models/role-resource";
 import { blobPut, blobListPathnames, blobDel } from "@/lib/blob";
-import { mapWithConcurrency } from "@/lib/utils";
-import { getProviderSettings, normalizeUserId } from "@/lib/server-settings";
+import { getProviderSettings } from "@/lib/server-settings";
 import { indexResourceFromBlob } from "@/lib/rag";
 import { getAuthUserId } from "@/lib/auth-request";
 import { assertRoleAccess } from "@/lib/server-settings";
 
-function sanitizeName(name: string): string {
-  return name
-    .replace(/\.zip$/i, "")
-    .replace(/[^a-zA-Z0-9_-]/g, "_")
-    .slice(0, 64)
-    || "resource";
+/** 允许上传的单文件扩展名（与 lib/rag 的 INDEXABLE_EXT 一致） */
+const ALLOWED_EXTS = new Set([".pdf", ".md", ".txt"]);
+
+/** 单文件大小上限 */
+const MAX_FILE_SIZE = 20 * 1024 * 1024;
+
+const MIME_BY_EXT: Record<string, string> = {
+  ".pdf": "application/pdf",
+  ".md": "text/markdown",
+  ".txt": "text/plain",
+};
+
+function getExt(name: string): string {
+  const lower = name.toLowerCase();
+  const idx = lower.lastIndexOf(".");
+  return idx === -1 ? "" : lower.slice(idx);
+}
+
+/** resourceId 用 ASCII 安全字符;纯非 ASCII 文件名(中文)退化为下划线时补 md5 片段避免撞名 */
+function sanitizeName(name: string, md5: string): string {
+  const base =
+    name
+      .replace(/\.[a-z0-9]+$/i, "")
+      .replace(/[^a-zA-Z0-9_-]/g, "_")
+      .slice(0, 64) || "resource";
+  return /^[\d_]*$/.test(base.replace(/-/g, "")) && !/\d/.test(base)
+    ? `${base}-${md5.slice(0, 8)}`
+    : base;
+}
+
+/** blob 内文件名:仅去掉路径分隔符与控制符,尽量保留原名(来源展示可读) */
+function safeEntryName(name: string): string {
+  const cleaned = name.replace(/[\r\n\\/:*?"<>|#\s]+/g, "-").slice(-120);
+  return cleaned || "file";
 }
 
 export async function GET(
@@ -41,6 +67,8 @@ export async function GET(
         resourceId: d.resourceId,
         fileName: d.fileName,
         filePath: d.filePath,
+        indexWarning: d.indexWarning ?? "",
+        authoritative: d.authoritative ?? false,
         createdAt: d.createdAt,
       })),
     });
@@ -82,14 +110,30 @@ export async function POST(
     const file = formData.get("file");
     if (!file || !(file instanceof File)) {
       return NextResponse.json(
-        { error: "Missing 'file' field with a zip archive." },
+        { error: "Missing 'file' field." },
+        { status: 400 },
+      );
+    }
+
+    const ext = getExt(file.name);
+    if (!ALLOWED_EXTS.has(ext)) {
+      return NextResponse.json(
+        {
+          error: `UNSUPPORTED_FILE_TYPE: only ${[...ALLOWED_EXTS].join("/")} are supported (zip archives are no longer accepted)`,
+        },
         { status: 400 },
       );
     }
 
     const arrayBuffer = await file.arrayBuffer();
-    const zipBuffer = Buffer.from(arrayBuffer);
-    const md5 = createHash("md5").update(zipBuffer).digest("hex");
+    if (arrayBuffer.byteLength > MAX_FILE_SIZE) {
+      return NextResponse.json(
+        { error: "FILE_TOO_LARGE: max 20MB per file." },
+        { status: 413 },
+      );
+    }
+    const buffer = Buffer.from(arrayBuffer);
+    const md5 = createHash("md5").update(buffer).digest("hex");
 
     await connectToMongo();
     const existing = await RoleResourceModel.findOne({ roleId, md5 }).lean();
@@ -100,12 +144,11 @@ export async function POST(
       );
     }
 
-    const resourceId = sanitizeName(file.name);
+    const resourceId = sanitizeName(file.name, md5);
     const blobPrefix = `resources/${roleId}/${resourceId}/`;
 
     // 同名资源(文件名相同、内容不同)默认拒绝,确认覆盖后才清理旧 blob 重传
-    const overwrite =
-      new URL(req.url).searchParams.get("overwrite") === "true";
+    const overwrite = url.searchParams.get("overwrite") === "true";
     const existingById = await RoleResourceModel.findOne({
       roleId,
       resourceId,
@@ -128,28 +171,7 @@ export async function POST(
       // 旧 blob 不存在则忽略
     }
 
-    const zip = new AdmZip(zipBuffer);
-    const entries = zip.getEntries();
-
-    // 检测根目录前缀并去掉
-    const firstDir = entries.find((e) => e.isDirectory);
-    const rootPrefix =
-      firstDir && entries.every((e) => e.entryName.startsWith(firstDir.entryName))
-        ? firstDir.entryName
-        : null;
-
-    // 远程 Blob 单次往返数百毫秒,并发写入(上限 6)避免随文件数线性变慢
-    const files = entries.flatMap((entry) => {
-      if (entry.isDirectory) return [];
-      const entryName = rootPrefix
-        ? entry.entryName.startsWith(rootPrefix)
-          ? entry.entryName.slice(rootPrefix.length)
-          : entry.entryName
-        : entry.entryName;
-      if (!entryName) return [];
-      return [{ path: blobPrefix + entryName, data: entry.getData() }];
-    });
-    await mapWithConcurrency(files, 6, (f) => blobPut(f.path, f.data));
+    await blobPut(blobPrefix + safeEntryName(file.name), buffer, MIME_BY_EXT[ext]);
 
     await RoleResourceModel.findOneAndUpdate(
       { roleId, resourceId },
@@ -160,6 +182,7 @@ export async function POST(
         md5,
         filePath: `resources/${roleId}/${resourceId}`,
         blobPrefix,
+        indexWarning: "",
       },
       { upsert: true, returnDocument: "after", setDefaultsOnInsert: true },
     );
@@ -167,6 +190,7 @@ export async function POST(
     // 切片 + 向量化入库（RAG 索引）。失败不阻断上传，仅返回未索引标记。
     let indexed = false;
     let chunkCount = 0;
+    let warnings: string[] = [];
     try {
       const providerSettings = await getProviderSettings(userId);
       const res = await indexResourceFromBlob(
@@ -177,6 +201,13 @@ export async function POST(
       );
       indexed = true;
       chunkCount = res.chunks;
+      warnings = res.warnings;
+      if (warnings.length > 0) {
+        await RoleResourceModel.updateOne(
+          { roleId, resourceId },
+          { $set: { indexWarning: warnings.join(",") } },
+        );
+      }
     } catch (err) {
       console.warn(
         `RAG indexing failed for ${roleId}/${resourceId}:`,
@@ -190,6 +221,7 @@ export async function POST(
       fileName: file.name,
       indexed,
       chunkCount,
+      warnings,
     });
   } catch (error) {
     const message =

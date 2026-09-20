@@ -5,6 +5,7 @@
  * 并尽量沿自然边界（段落 > 换行 > 句号 > 字符）拆分，避免切断句子。
  *
  * 零依赖实现，参数默认 ~800 字符/片、150 重叠（≈200 token/片）。
+ * chunkPaginatedText 在此之上做 PDF 页感知切片（切片携带页码范围）。
  */
 
 export type ChunkOptions = {
@@ -12,6 +13,13 @@ export type ChunkOptions = {
   maxChunkSize?: number;
   /** 相邻切片重叠字符数，默认 150 */
   overlap?: number;
+};
+
+/** 页感知切片结果:content 之外携带覆盖的页码范围(PDF 溯源用) */
+export type PaginatedChunk = {
+  content: string;
+  pageStart: number;
+  pageEnd: number;
 };
 
 const DEFAULT_MAX = 800;
@@ -98,8 +106,57 @@ export function chunkText(text: string, options?: ChunkOptions): string[] {
   if (!text || !text.trim()) return [];
   if (text.length <= maxChunkSize) return [text.trim()];
 
-  // 分隔符优先级：段落 > 单换行 > 句号空格 > 字符
-  const separators = ["\n\n", "\n", ". ", " "];
+  // 分隔符优先级：段落 > 单换行 > 中文句号 > 英文句号 > 中文分号 > 空格
+  // 中文断句符使纯中文文本不再落到字符级硬切
+  const separators = ["\n\n", "\n", "。", ". ", "；", " "];
   const pieces = recursiveSplit(text, separators, maxChunkSize);
   return mergeWithOverlap(pieces, maxChunkSize, overlap);
+}
+
+/**
+ * PDF 页感知切片:逐页文本累积进缓冲,缓冲超过 maxChunkSize 后对缓冲做
+ * chunkText 切片并输出(记录覆盖的页码范围),小尾片留作下一轮种子与后续
+ * 页合并——短页(目录/章尾)不产生碎片,跨页段落尽量保留在同一片内。
+ */
+export function chunkPaginatedText(
+  pages: { page: number; text: string }[],
+  options?: ChunkOptions,
+): PaginatedChunk[] {
+  const maxChunkSize = Math.max(64, options?.maxChunkSize ?? DEFAULT_MAX);
+  const result: PaginatedChunk[] = [];
+
+  let buffer = "";
+  let startPage = 0;
+  let endPage = 0;
+
+  for (const { page, text } of pages) {
+    const piece = text.trim();
+    if (!piece) continue;
+    if (!buffer) startPage = page;
+    buffer = buffer ? `${buffer}\n\n${piece}` : piece;
+    endPage = page;
+
+    if (buffer.length < maxChunkSize) continue;
+
+    const pieces = chunkText(buffer, options);
+    const tail = pieces[pieces.length - 1] ?? "";
+    for (const content of pieces.slice(0, -1)) {
+      result.push({ content, pageStart: startPage, pageEnd: endPage });
+    }
+    if (tail && tail.length >= Math.floor(maxChunkSize * 0.75)) {
+      // 尾片已接近单片大小:直接输出,清空缓冲
+      result.push({ content: tail, pageStart: startPage, pageEnd: endPage });
+      buffer = "";
+    } else {
+      // 小尾片作种子,页码范围随内容保留(内容确实来自该范围)
+      buffer = tail;
+    }
+  }
+
+  if (buffer.trim()) {
+    for (const content of chunkText(buffer, options)) {
+      result.push({ content, pageStart: startPage, pageEnd: endPage });
+    }
+  }
+  return result;
 }

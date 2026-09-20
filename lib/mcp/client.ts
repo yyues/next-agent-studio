@@ -14,6 +14,7 @@ import { encryptSecretMap } from "@/lib/secret-crypto";
 import { GLOBAL_ROLE_ID, GLOBAL_USER_ID, BUILTIN_USER_ID } from "@/lib/scopes";
 import { isBuiltinRole, personalRoleClause } from "@/lib/server-settings";
 import { findMcpRowsByRefs } from "@/lib/resource-refs";
+import { cachedLoad, invalidateCache } from "@/lib/config-cache";
 
 const CONNECT_TIMEOUT_MS = 8000;
 // stdio 型首连较慢(npx 首次运行需下载依赖),放宽超时
@@ -123,8 +124,19 @@ export async function listMcpServers(
  * 角色有效 MCP:自己的({userId,roleId} 行) + mcpRefs 引用解析
  * (全局库/自己其他角色) + 内置角色自动包含全局库。
  * 按 serverId 去重,自己的优先。读取失败静默降级(引用目标消失即失效)。
+ * 进程内 TTL 缓存(4 次 Mongo 往返):upsert/delete 与 updateRole(mcpRefs)
+ * 主动逐出,全局库变更全清。
  */
 export async function listEffectiveMcpServers(
+  userId: string,
+  roleId: string,
+): Promise<EffectiveMcpServer[]> {
+  return cachedLoad("mcp", `${userId}/${roleId}`, () =>
+    loadEffectiveMcpServersFromDb(userId, roleId),
+  );
+}
+
+async function loadEffectiveMcpServersFromDb(
   userId: string,
   roleId: string,
 ): Promise<EffectiveMcpServer[]> {
@@ -193,6 +205,44 @@ export async function listGlobalMcpServers(): Promise<McpServerConfig[]> {
     .sort((a, b) => a.serverId.localeCompare(b.serverId));
 }
 
+/** 去掉两端包裹引号(JSON 风格输入会带上),避免 Headers.append 抛非法 header 名 */
+function stripWrappingQuotes(s: string): string {
+  const t = s.trim();
+  if (
+    t.length >= 2 &&
+    ((t.startsWith('"') && t.endsWith('"')) ||
+      (t.startsWith("'") && t.endsWith("'")))
+  )
+    return t.slice(1, -1).trim();
+  return t;
+}
+
+// fetch 规范允许的 header 名字符
+const HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+/**
+ * headers/env 键值清理:剥包裹引号;header 名按 fetch 规范校验,
+ * 非法时抛可读错误(而不是连接时 SDK 内部的 Headers.append TypeError)。
+ */
+function sanitizeSecretMap(
+  value: Record<string, string> | undefined,
+  kind: "header" | "env",
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [rawKey, rawVal] of Object.entries(value ?? {})) {
+    const key = stripWrappingQuotes(String(rawKey));
+    const v = typeof rawVal === "string" ? stripWrappingQuotes(rawVal) : "";
+    if (!key || !v) continue;
+    if (kind === "header" && !HEADER_NAME_RE.test(key)) {
+      throw new Error(
+        `Invalid header name "${key}". Use "Key: Value" per line or a JSON object, without quotes around the name.`,
+      );
+    }
+    out[key] = v;
+  }
+  return out;
+}
+
 /**
  * upsert 载荷校验与归一:
  * - http 型要求合法 http(s) URL
@@ -228,12 +278,8 @@ function normalizeMcpUpsert(payload: McpUpsertPayload) {
     throw new Error("command and args must not contain line breaks.");
   }
 
-  const pickSecrets = (value: Record<string, string> | undefined) =>
-    Object.fromEntries(
-      Object.entries(value ?? {}).filter(
-        ([k, v]) => k.trim() && typeof v === "string" && v.trim(),
-      ),
-    );
+  const pickSecrets = (value: Record<string, string> | undefined, kind: "header" | "env") =>
+    sanitizeSecretMap(value, kind);
 
   return {
     type,
@@ -241,8 +287,8 @@ function normalizeMcpUpsert(payload: McpUpsertPayload) {
     url,
     command,
     args,
-    headers: pickSecrets(payload.headers),
-    env: pickSecrets(payload.env),
+    headers: pickSecrets(payload.headers, "header"),
+    env: pickSecrets(payload.env, "env"),
   };
 }
 
@@ -295,6 +341,8 @@ export async function upsertGlobalMcpServer(
   ).lean();
 
   if (!doc) throw new Error("Failed to save MCP server.");
+  // 全局库行影响所有角色的有效 MCP 列表,全清
+  invalidateCache("mcp");
   return toMcpServerConfig(doc as Record<string, unknown>);
 }
 
@@ -305,6 +353,7 @@ export async function deleteGlobalMcpServer(serverId: string) {
     serverId,
   });
   if (result.deletedCount === 0) throw new Error("MCP server not found.");
+  invalidateCache("mcp");
   return { deleted: true };
 }
 
@@ -359,6 +408,7 @@ export async function upsertMcpServer(
   ).lean();
 
   if (!doc) throw new Error("Failed to save MCP server.");
+  invalidateCache("mcp", `${userId}/${roleId}`);
   return toMcpServerConfig(doc as Record<string, unknown>);
 }
 
@@ -370,6 +420,7 @@ export async function deleteMcpServer(
   await connectToMongo();
   const result = await McpServerModel.deleteOne({ userId, roleId, serverId });
   if (result.deletedCount === 0) throw new Error("MCP server not found.");
+  invalidateCache("mcp", `${userId}/${roleId}`);
   return { deleted: true };
 }
 
@@ -377,7 +428,14 @@ export async function deleteMcpServer(
 export async function testMcpServer(
   input: McpConnectTarget,
 ): Promise<{ ok: true; toolNames: string[]; serverName?: string }> {
-  const { client, toolNames, serverName } = await connectSingle(input);
+  // 测试路径与保存路径走同一套 headers/env 清理(剥引号 + header 名校验),
+  // 否则非法名会一路漏到 MCP SDK 的 Headers.append 才抛出难以理解的错误
+  const sanitized: McpConnectTarget = {
+    ...input,
+    headers: sanitizeSecretMap(input.headers, "header"),
+    env: sanitizeSecretMap(input.env, "env"),
+  };
+  const { client, toolNames, serverName } = await connectSingle(sanitized);
   try {
     return { ok: true, toolNames, serverName };
   } finally {
