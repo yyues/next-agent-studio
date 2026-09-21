@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, type FC } from "react";
+import { useEffect, useRef, useState, type FC } from "react";
+import { useAuiState } from "@assistant-ui/react";
 import { Assistant } from "../assistant";
 import { Thread } from "@/components/assistant-ui/thread";
 import { SettingsMenu } from "@/components/assistant-ui/settings-menu";
@@ -29,12 +30,44 @@ type ChatClientProps = {
   initialRoleId?: string;
   /** 应用标题(来自 APP_TITLE env,服务端注入) */
   appTitle?: string;
+  /** 服务端确认该 chatId 已落库:刷新时启动窗口显示骨架屏而非新会话欢迎页 */
+  expectHistory?: boolean;
+};
+
+/**
+ * 新对话 URL 兜底同步(必须渲染在 AssistantRuntimeProvider 内部):
+ * 点"新对话"切换到的占位线程没有 remoteId,运行时的 onThreadIdChange 不会触发,
+ * URL 会停留在旧会话上——刷新就跳回旧会话。
+ * 这里监听主线程状态:仅在主线程【变为】新占位线程时把其 id 写入 URL。
+ * - 跳过挂载初值:刷新已有会话时的"占位 → 领养"过程不写 URL;
+ * - 占位线程发首条消息时 initialize 沿用该 id 落库,URL 全程一致;
+ * - 切到已有会话由运行时的 onThreadIdChange 负责,互不冲突。
+ */
+const NewThreadUrlSync: FC<{ onSync: (threadId: string) => void }> = ({
+  onSync,
+}) => {
+  const newThreadId = useAuiState((s) =>
+    s.threadListItem.status === "new" ? s.threadListItem.id : undefined,
+  );
+  // null = 尚未记录挂载初值
+  const prevRef = useRef<string | undefined | null>(null);
+  useEffect(() => {
+    if (prevRef.current === null) {
+      prevRef.current = newThreadId;
+      return;
+    }
+    if (prevRef.current === newThreadId) return;
+    prevRef.current = newThreadId;
+    if (newThreadId) onSync(newThreadId);
+  }, [newThreadId, onSync]);
+  return null;
 };
 
 export const ChatClient: FC<ChatClientProps> = ({
   chatId,
   initialRoleId,
   appTitle = "Agent Studio",
+  expectHistory = false,
 }) => {
   const t = useTranslations("common");
   const { collapsed, toggle } = useSidebarCollapsed();
@@ -74,6 +107,7 @@ export const ChatClient: FC<ChatClientProps> = ({
       conversationId={chatId}
       onThreadIdChange={handleThreadIdChange}
     >
+      <NewThreadUrlSync onSync={handleThreadIdChange} />
       <div className="bg-background text-foreground flex h-dvh overflow-hidden">
         <ConversationSidebar
           collapsed={collapsed}
@@ -112,7 +146,7 @@ export const ChatClient: FC<ChatClientProps> = ({
 
           {/* 对话区 */}
           <div className="min-h-0 flex-1">
-            <Thread />
+            <Thread expectHistory={expectHistory} />
           </div>
         </div>
       </div>

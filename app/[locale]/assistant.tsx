@@ -36,6 +36,17 @@ type ConversationSummary = {
 
 const userId = () => getClientRuntimeContext().userId;
 
+/**
+ * adapter.fetch 预取到的会话内容,由 history.load 一次性消费。
+ * 领养流程(刷新 /chat/<id>)中 fetch 与 load 命中的是同一条会话,
+ * 直接传递可避免第二次重复请求;新会话(空记录)因此瞬时完成加载,
+ * 不会出现"骨架屏闪一下又消失"的窗口。一次性消费,后续重新挂载仍走网络取最新。
+ */
+const prefetchedHistories = new Map<
+  string,
+  { messages: UIMessage[]; roleId?: string }
+>();
+
 /** 从消息列表推导标题:首条用户消息文本前 30 字符(generateTitle 与兜底重命名共用) */
 function firstUserTitle(
   messages: readonly {
@@ -78,19 +89,24 @@ const useThreadAdapters = () => {
           async load(): Promise<{ messages: ReturnType<typeof fa.decode>[] }> {
             const { remoteId } = aui.threadListItem.getState();
             if (!remoteId) return { messages: [] };
-            let stored: UIMessage[] = [];
-            let storedRoleId: string | undefined;
-            try {
-              const res = await fetch(
-                `/api/conversations/${encodeURIComponent(remoteId)}?userId=${encodeURIComponent(userId())}`,
-              );
-              if (res.ok) {
-                const data = (await res.json()) as { messages?: UIMessage[]; roleId?: string };
-                stored = data.messages ?? [];
-                storedRoleId = data.roleId;
+            // 领养 fetch 已取过同一条会话 → 直接消费,跳过重复请求
+            const prefetched = prefetchedHistories.get(remoteId);
+            if (prefetched) prefetchedHistories.delete(remoteId);
+            let stored: UIMessage[] = prefetched?.messages ?? [];
+            let storedRoleId: string | undefined = prefetched?.roleId;
+            if (!prefetched) {
+              try {
+                const res = await fetch(
+                  `/api/conversations/${encodeURIComponent(remoteId)}?userId=${encodeURIComponent(userId())}`,
+                );
+                if (res.ok) {
+                  const data = (await res.json()) as { messages?: UIMessage[]; roleId?: string };
+                  stored = data.messages ?? [];
+                  storedRoleId = data.roleId;
+                }
+              } catch {
+                stored = [];
               }
-            } catch {
-              stored = [];
             }
             // 会话记录带有角色 → 切换回该会话时恢复其角色(当前会话内切换只影响后续消息)
             if (storedRoleId && storedRoleId !== getClientRuntimeContext().roleId) {
@@ -186,11 +202,23 @@ const createConversationAdapter = (): RemoteThreadListAdapter => ({
     const res = await fetch(
       `/api/conversations/${encodeURIComponent(remoteId)}?userId=${encodeURIComponent(userId())}`,
     );
-    const title = res.ok ? ((await res.json()) as { title?: string }).title : "";
+    if (!res.ok) {
+      return { status: "regular" as const, remoteId };
+    }
+    const data = (await res.json()) as {
+      title?: string;
+      messages?: UIMessage[];
+      roleId?: string;
+    };
+    // 预取内容交给 history.load 消费(见 prefetchedHistories)
+    prefetchedHistories.set(remoteId, {
+      messages: data.messages ?? [],
+      roleId: data.roleId,
+    });
     return {
       status: "regular" as const,
       remoteId,
-      title: title || undefined,
+      title: data.title || undefined,
     };
   },
 });

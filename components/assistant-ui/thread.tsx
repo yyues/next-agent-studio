@@ -101,8 +101,28 @@ const ThreadHistorySkeleton: FC = () => {
   );
 };
 
-export const Thread: FC = () => {
+export const Thread: FC<{ expectHistory?: boolean }> = ({
+  expectHistory = false,
+}) => {
   const isEmpty = useAuiState(isNewChatView);
+  const isHistoryLoading = useAuiState(isHistoryLoadingView);
+  const composerIsEmpty = useAuiState((s) => s.composer.isEmpty);
+  // 主线程仍是占位新线程(未落库/未完成领养)
+  const isPlaceholderNew = useAuiState((s) => s.threadListItem.status === "new");
+  // 启动闩锁:首次脱离占位线程(领养完成)后,本挂载周期内不再进入启动加载态
+  const [startupDone, setStartupDone] = useState(false);
+  useEffect(() => {
+    if (!isPlaceholderNew) setStartupDone(true);
+  }, [isPlaceholderNew]);
+
+  // 服务端确认 URL 是已有会话:启动"占位→领养"窗口显示骨架屏,
+  // 而不是新会话欢迎页(否则刷新已有会话会先闪一下欢迎页)。
+  // 仅启动窗口生效——之后用户点"新对话"回到占位线程时仍显示欢迎页。
+  const isStartupLoading =
+    expectHistory && !startupDone && isPlaceholderNew && isEmpty;
+
+  const showWelcome = isEmpty && !isStartupLoading;
+  const showSkeleton = isHistoryLoading || isStartupLoading;
 
   return (
     <ThreadPrimitive.Root
@@ -124,15 +144,11 @@ export const Thread: FC = () => {
         <div
           className={cn(
             "mx-auto flex w-full max-w-(--thread-max-width) flex-1 flex-col px-4 pt-4",
-            isEmpty && "justify-center",
+            showWelcome && "justify-center",
           )}
         >
-          <AuiIf condition={isNewChatView}>
-            <ThreadWelcome />
-          </AuiIf>
-          <AuiIf condition={isHistoryLoadingView}>
-            <ThreadHistorySkeleton />
-          </AuiIf>
+          {showWelcome && <ThreadWelcome />}
+          {showSkeleton && <ThreadHistorySkeleton />}
 
           <div
             data-slot="aui_message-group"
@@ -146,15 +162,13 @@ export const Thread: FC = () => {
           <ThreadPrimitive.ViewportFooter
             className={cn(
               "aui-thread-viewport-footer bg-background flex flex-col gap-4 overflow-visible pb-4 md:pb-6",
-              !isEmpty &&
+              !showWelcome &&
                 "sticky bottom-0 mt-auto rounded-t-(--composer-radius)",
             )}
           >
             <ThreadScrollToBottom />
             <Composer />
-            <AuiIf condition={(s) => isNewChatView(s) && s.composer.isEmpty}>
-              <ThreadSuggestions />
-            </AuiIf>
+            {showWelcome && composerIsEmpty && <ThreadSuggestions />}
           </ThreadPrimitive.ViewportFooter>
         </div>
       </ThreadPrimitive.Viewport>
