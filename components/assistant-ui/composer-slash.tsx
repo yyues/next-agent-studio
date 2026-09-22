@@ -11,15 +11,25 @@ import { useCommandRegistry, type CommandEntry } from "@/lib/command-registry";
 import { slashDirectiveFormatter } from "@/lib/slash-directive";
 import { CommandChip } from "@/components/assistant-ui/command-chip";
 import { cn } from "@/lib/utils";
-import { Loader2Icon, PlugZapIcon, SparklesIcon } from "lucide-react";
+import { ClipboardListIcon, Loader2Icon, PlugZapIcon, SparklesIcon } from "lucide-react";
 
 type SlashItem = {
   id: string;
-  type: "skill" | "mcp";
+  type: "plan" | "skill" | "mcp";
   label: string;
   description: string;
   metadata: { name: string; kind: string };
 };
+
+function planItem(description: string): SlashItem {
+  return {
+    id: "plan",
+    type: "plan",
+    label: "plan",
+    description,
+    metadata: { name: "plan", kind: "plan" },
+  };
+}
 
 /** registry 条目 → TriggerItem(label = 命令名,chip 直接显示) */
 function toItems(commands: CommandEntry[]): SlashItem[] {
@@ -34,7 +44,7 @@ function toItems(commands: CommandEntry[]): SlashItem[] {
 
 /**
  * "/" 命令面板(Slack/Discord 式):
- * - 输入 / 弹出当前角色的技能；MCP 统一通过 @ 面板显式调用
+ * - 输入 / 弹出计划模式、当前角色的技能与 MCP 服务器
  * - 选中插入 /名称 (Directive 行为,自定义 formatter)
  * - ↑↓ 导航 / Enter 选中 / Esc 关闭、ARIA combobox 均由原语内置
  * 输入框本体使用官方 LexicalComposerInput(react-lexical),
@@ -59,30 +69,24 @@ export const ComposerSlash: FC = () => {
     return () => window.removeEventListener(RUNTIME_CONTEXT_UPDATED_EVENT, sync);
   }, [ensureLoaded]);
 
-  const skillCommands = useMemo(
-    () => commands.filter((command) => command.type === "skill"),
-    [commands],
-  );
-
-  // 无 categories → 空查询也走 search() 平铺全部技能
+  // 无 categories → 空查询也走 search() 平铺全部命令。
   const adapter = useMemo(
     () => ({
       categories: () => [],
       categoryItems: () => [],
       search: (query: string) => {
         const lower = query.trim().toLowerCase();
-        if (!lower) return toItems(skillCommands);
-        return toItems(
-          skillCommands.filter(
-            (c) =>
-              c.name.toLowerCase().includes(lower) ||
-              c.label.toLowerCase().includes(lower) ||
-              c.description.toLowerCase().includes(lower),
-          ),
+        const items = [planItem(t("slashPlanDescription")), ...toItems(commands)];
+        if (!lower) return items;
+        return items.filter(
+          (item) =>
+            item.metadata.name.toLowerCase().includes(lower) ||
+            item.label.toLowerCase().includes(lower) ||
+            item.description.toLowerCase().includes(lower),
         );
       },
     }),
-    [skillCommands],
+    [commands, t],
   );
 
   if (!roleId) return null;
@@ -147,6 +151,7 @@ const SlashList: FC<{ items: SlashItem[]; loading: boolean }> = ({ items, loadin
 
   const skills = items.filter((i) => i.type === "skill");
   const mcps = items.filter((i) => i.type === "mcp");
+  const plans = items.filter((i) => i.type === "plan");
 
   const group = (
     key: string,
@@ -171,24 +176,28 @@ const SlashList: FC<{ items: SlashItem[]; loading: boolean }> = ({ items, loadin
             <span
               className={cn(
                 "flex size-6 shrink-0 items-center justify-center rounded-md",
-                item.type === "skill" ? "bg-primary/10 text-primary" : "bg-chart-2/15 text-chart-2",
+                item.type === "skill"
+                  ? "bg-primary/10 text-primary"
+                  : item.type === "plan"
+                    ? "bg-violet-500/15 text-violet-600 dark:text-violet-400"
+                    : "bg-chart-2/15 text-chart-2",
               )}
             >
               {item.type === "skill" ? (
                 <SparklesIcon className="size-3.5" />
+              ) : item.type === "plan" ? (
+                <ClipboardListIcon className="size-3.5" />
               ) : (
                 <PlugZapIcon className="size-3.5" />
               )}
             </span>
-            <span className="min-w-0 flex-1">
-              <span className="block truncate font-medium">
+            <span className="flex min-w-0 flex-1 items-baseline gap-1.5 overflow-hidden">
+              <span className="shrink-0 font-medium">
                 <span className="text-muted-foreground">/</span>
                 {item.metadata.name}
               </span>
               {item.description && (
-                <span className="text-muted-foreground block truncate text-xs">
-                  {item.description}
-                </span>
+                <span className="text-muted-foreground truncate text-xs">{item.description}</span>
               )}
             </span>
           </ComposerPrimitive.Unstable_TriggerPopoverItem>
@@ -198,8 +207,21 @@ const SlashList: FC<{ items: SlashItem[]; loading: boolean }> = ({ items, loadin
 
   return (
     <>
-      {group("skill", t("slashSkills"), <SparklesIcon className="size-3" key="i" />, skills, 0)}
-      {group("mcp", t("slashMcp"), <PlugZapIcon className="size-3" key="i" />, mcps, skills.length)}
+      {group("plan", t("slashPlans"), <ClipboardListIcon className="size-3" key="i" />, plans, 0)}
+      {group(
+        "skill",
+        t("slashSkills"),
+        <SparklesIcon className="size-3" key="i" />,
+        skills,
+        plans.length,
+      )}
+      {group(
+        "mcp",
+        t("slashMcp"),
+        <PlugZapIcon className="size-3" key="i" />,
+        mcps,
+        plans.length + skills.length,
+      )}
     </>
   );
 };

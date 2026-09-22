@@ -134,7 +134,8 @@ export const Thread: FC<{ expectHistory?: boolean }> = ({ expectHistory = false 
       {/* 对话缩略时间线:每横线一条消息,悬停预览,点击定位 */}
       <ConversationTimeline />
       <ThreadPrimitive.Viewport
-        turnAnchor="top"
+        turnAnchor="bottom"
+        autoScroll
         data-slot="aui_thread-viewport"
         className="relative flex flex-1 flex-col overflow-x-auto overflow-y-scroll scroll-smooth"
       >
@@ -388,12 +389,21 @@ const MessageError: FC = () => {
  * undefined，让 ThinkingIndicator 退场。
  */
 function useThinkingLabel() {
+  const [deepThinking, setDeepThinking] = useState(false);
+
+  useEffect(() => {
+    const sync = () => setDeepThinking(getClientRuntimeContext().deepThinking === true);
+    sync();
+    window.addEventListener(RUNTIME_CONTEXT_UPDATED_EVENT, sync);
+    return () => window.removeEventListener(RUNTIME_CONTEXT_UPDATED_EVENT, sync);
+  }, []);
+
   return useAuiState((s) => {
     if (s.message.status?.type !== "running") return undefined;
     const pending = s.message.parts.find((p) => p.type === "tool-call" && p.result === undefined);
     if (pending?.type === "tool-call") return `调用 ${prettyToolName(pending.toolName)}`;
     const hasText = s.message.parts.some((p) => p.type === "text" && p.text.length > 0);
-    return hasText ? undefined : "深度思考中";
+    return hasText ? undefined : deepThinking ? "深度思考中" : "生成中";
   });
 }
 
@@ -514,6 +524,18 @@ const AssistantMessage: FC = () => {
 
 const AssistantActionBar: FC = () => {
   const t = useTranslations("thread");
+  const awaitingPlanQuestions = useAuiState((s) =>
+    s.message.parts.some(
+      (part) =>
+        part.type === "tool-call" &&
+        part.toolName === "ask_plan_questions" &&
+        part.result === undefined,
+    ),
+  );
+
+  // 人工确认卡片等待用户输入时，消息尚未真正完成，隐藏复制/重试/反馈等操作。
+  if (awaitingPlanQuestions) return null;
+
   return (
     <ActionBarPrimitive.Root
       hideWhenRunning

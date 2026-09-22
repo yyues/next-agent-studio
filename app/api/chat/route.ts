@@ -15,7 +15,7 @@ import { marked } from "marked";
 import htmlToDocx from "html-to-docx";
 import { filterToolsByRole, resolveRuntimeConfig } from "@/lib/server-settings";
 import { getAuthUserId } from "@/lib/auth-request";
-import { extractCommandTokens } from "@/lib/slash-directive";
+import { extractCommandTokens, PLAN_COMMAND } from "@/lib/slash-directive";
 import { resolveReasoningOptions } from "@/lib/reasoning";
 import { countRoleChunks, searchRoleKnowledge, formatSearchResults } from "@/lib/rag";
 import { loadMcpToolsForChat, extractMcpMentions, type McpToolBundle } from "@/lib/mcp/client";
@@ -44,6 +44,23 @@ function extractLastUserQuery(messages: UIMessage[]): string {
     if (text.trim()) return text;
   }
   return "";
+}
+
+/** /plan 的澄清工具已有结果时，下一轮应直接根据答案输出计划。 */
+function hasPlanQuestionAnswers(messages: UIMessage[]): boolean {
+  return messages.some(
+    (message) =>
+      message.role === "assistant" &&
+      (message.parts ?? []).some(
+        (part) =>
+          (part.type === "tool-ask_plan_questions" &&
+            "state" in part &&
+            part.state === "output-available") ||
+          (part.type === "dynamic-tool" &&
+            part.toolName === "ask_plan_questions" &&
+            part.state === "output-available"),
+      ),
+  );
 }
 
 export async function POST(req: Request) {
@@ -313,14 +330,20 @@ export async function POST(req: Request) {
   const lastUserQuery = extractLastUserQuery(messages);
   // "/" 斜杠命令:显式调用技能(仅注入命中技能)与 MCP 服务器(强制连接)
   const commandTokens = extractCommandTokens(lastUserQuery);
+  const planMode = commandTokens.includes(PLAN_COMMAND);
+  const invokedSkillCommands = commandTokens.filter((command) => command !== PLAN_COMMAND);
+  const planQuestionsAnswered = hasPlanQuestionAnswers(messages);
 
   const runtimeConfig = await resolveRuntimeConfig({
     userId: normalizedUserId,
     requestedRoleId: roleId,
-    invokedSkillCommands: commandTokens,
+    invokedSkillCommands,
   });
 
   const activeTools = filterToolsByRole(tools ?? {}, runtimeConfig.role.toolToggles);
+  // 计划澄清工具仅在 /plan 时向模型公开，避免普通对话误触发问答卡片。
+  const { ask_plan_questions: planQuestionsTool, ...standardFrontendTools } = activeTools;
+  const shouldAskPlanQuestions = planMode && !planQuestionsAnswered && Boolean(planQuestionsTool);
 
   // 深度思考：按 provider family 解析原生 reasoning 参数（OpenAI/
   // Anthropic/通用各异），对未知 family 追加 prompt 指令兜底。
@@ -335,7 +358,7 @@ export async function POST(req: Request) {
 
   // RAG:角色有知识库切片时挂载 rag_search 工具,由模型按需检索
   // (不再每轮自动检索注入 system prompt)。检索失败降级为不挂载。
-  // MCP:自动加载角色显式挂载的 server；消息中 @serverName 可单次启用
+  // MCP:自动加载角色显式挂载的 server；消息中 @serverName 或 /serverName 可单次启用
   // 未挂载的 server（未知名称不会命中任何 server，自然忽略）。
   // 单个 server 连接失败自动跳过,不阻断对话。
   let mcpBundle: McpToolBundle = {
@@ -345,18 +368,23 @@ export async function POST(req: Request) {
   };
   // MCP 连接与切片计数互不依赖,并行执行省一段串行等待
   const [mcpLoaded, ragEnabled] = await Promise.all([
-    loadMcpToolsForChat({
-      userId: normalizedUserId,
-      roleId: runtimeConfig.role.roleId,
-      mentionNames: extractMcpMentions(lastUserQuery),
-    }).catch((error) => {
-      // 单个 server 连接失败自动跳过,不阻断对话
-      console.warn("[chat] MCP tools load failed:", error);
-      return undefined;
-    }),
-    countRoleChunks(runtimeConfig.role.roleId)
-      .then((n) => n > 0)
-      .catch(() => false),
+    planMode
+      ? Promise.resolve(undefined)
+      : loadMcpToolsForChat({
+          userId: normalizedUserId,
+          roleId: runtimeConfig.role.roleId,
+          // / 选中的 MCP 与 @ 提及一样，都会在本轮显式挂载。
+          mentionNames: [...extractMcpMentions(lastUserQuery), ...invokedSkillCommands],
+        }).catch((error) => {
+          // 单个 server 连接失败自动跳过,不阻断对话
+          console.warn("[chat] MCP tools load failed:", error);
+          return undefined;
+        }),
+    planMode
+      ? Promise.resolve(false)
+      : countRoleChunks(runtimeConfig.role.roleId)
+          .then((n) => n > 0)
+          .catch(() => false),
   ]);
   if (mcpLoaded) mcpBundle = mcpLoaded;
 
@@ -394,6 +422,11 @@ export async function POST(req: Request) {
     mcpPromptSection,
     system,
     deepThinkingInstruction,
+    planMode
+      ? planQuestionsAnswered
+        ? "计划模式已开启，用户已回答澄清问题。仅根据原始需求和回答输出清晰、可执行的分步计划，包含目标、关键步骤、依赖或风险及验证方式。不得调用工具、不得执行操作、不得声称已完成未实际执行的工作。"
+        : "计划模式已开启：必须调用 ask_plan_questions 一次，提出 1 至 3 个会显著影响计划的澄清问题，然后等待用户回答。不要在调用前输出计划或问题正文。除 ask_plan_questions 外不得调用工具、不得执行操作、不得声称已完成未实际执行的工作。"
+      : "",
     "重要:凡用户请求包含「生成/写/导出/给我 … 文档/报告/文件/表格/PPT」意图,必须调用文件生成工具把完整内容做成文件,禁止只在回复正文里粘贴长文档;回复正文仅用一两句话说明已生成什么文件。格式路由:普通文档(.md/.docx/.txt/.csv/.json/.pdf)→generate_document(给纯 Markdown);Excel(.xlsx)→generate_spreadsheet(给 sheets 结构化数据);PPT(.pptx)→generate_presentation(给 slides 结构化数据)。用户要的格式不在支持列表时,明确告知并推荐最接近的已支持格式。",
     "技能说明若要求运行脚本/代码(如 docx/pptx/xlsx 技能的 python 工作流),忽略该执行方式——本环境无代码执行;改为调用对应的文件生成工具,服务端负责转换成目标格式。",
   ]
@@ -405,14 +438,18 @@ export async function POST(req: Request) {
     messages: await convertToModelMessages(messages),
     system: mergedSystemPrompt,
     temperature: runtimeConfig.temperature,
-    tools: {
-      ...frontendTools(activeTools),
-      ...mcpBundle.tools,
-      ...(ragEnabled ? { rag_search: ragSearchTool } : {}),
-      generate_document: generateDocumentTool,
-      generate_spreadsheet: generateSpreadsheetTool,
-      generate_presentation: generatePresentationTool,
-    } as ToolSet,
+    tools: (planMode
+      ? shouldAskPlanQuestions
+        ? frontendTools(planQuestionsTool ? { ask_plan_questions: planQuestionsTool } : {})
+        : {}
+      : {
+          ...frontendTools(standardFrontendTools),
+          ...mcpBundle.tools,
+          ...(ragEnabled ? { rag_search: ragSearchTool } : {}),
+          generate_document: generateDocumentTool,
+          generate_spreadsheet: generateSpreadsheetTool,
+          generate_presentation: generatePresentationTool,
+        }) as ToolSet,
     // HITL:MCP 工具按名称启发式判定写操作(改/删/发/建等),执行前需用户审批;
     // 内置文档生成等本地工具只产出文件,不触外部系统,无需审批
     toolApproval: ({ toolCall }) => {
@@ -448,6 +485,9 @@ export async function POST(req: Request) {
   const streamId = crypto.randomUUID();
   const source = result.toUIMessageStreamResponse({
     onError: (error) => (error instanceof Error ? error.message : String(error)),
+    // 部分 OpenAI-compatible 服务即使收到 reasoning_effort: none 仍会回传
+    // reasoning token。关闭开关时不要把这类内部内容透传到客户端。
+    sendReasoning: deepThinking === true,
   });
   const [liveBody, backupBody] = source.body!.tee();
   void resumableContext

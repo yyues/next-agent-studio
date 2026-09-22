@@ -13,6 +13,9 @@ export type SlashSegment =
   | { kind: "text"; text: string }
   | { kind: "mention"; type: string; label: string; id: string };
 
+/** 内置的单轮计划模式命令，不与角色技能混用。 */
+export const PLAN_COMMAND = "plan";
+
 const NAME_RE = /[A-Za-z0-9_\u4e00-\u9fa5][A-Za-z0-9_\u4e00-\u9fa5-]*/;
 
 /** 判断 text[i] 处的触发符是否处于词首(空白/行首/括号后) */

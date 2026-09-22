@@ -6,7 +6,7 @@ import { getClientRuntimeContext } from "@/lib/client-runtime-context";
 /**
  * "/" 命令注册表(客户端):
  * 汇总当前角色的技能与 MCP 服务器,供
- * - Composer 斜杠面板（仅技能）
+ * - Composer 斜杠面板（技能与 MCP 服务器）
  * - Composer @ 面板（仅 MCP）
  * - 输入框镜像高亮 & 对话历史 chip(校验 /name 是否已知命令)
  * 共用。数据来自现有只读接口,roleId 变化时重新拉取。

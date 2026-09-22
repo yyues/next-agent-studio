@@ -26,6 +26,7 @@ import {
 import { useCallback, useEffect, useMemo, type FC, type ReactNode, useRef } from "react";
 import { getClientRuntimeContext, setClientRuntimeContext } from "@/lib/client-runtime-context";
 import { CONVERSATION_SAVED_EVENT } from "@/lib/conversation-events";
+import { PlanQuestionsTool } from "@/components/assistant-ui/plan-questions-tool";
 
 type ConversationSummary = {
   conversationId: string;
@@ -369,5 +370,10 @@ export const Assistant: FC<AssistantProps> = ({ conversationId, onThreadIdChange
     },
   });
 
-  return <AssistantRuntimeProvider runtime={runtime}>{children}</AssistantRuntimeProvider>;
+  return (
+    <AssistantRuntimeProvider runtime={runtime}>
+      <PlanQuestionsTool />
+      {children}
+    </AssistantRuntimeProvider>
+  );
 };

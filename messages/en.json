@@ -60,6 +60,8 @@
     "timelineAi": "AI",
     "timelineEmpty": "(no text)",
     "slashLabel": "Command palette",
+    "slashPlans": "Modes",
+    "slashPlanDescription": "Clarify key details, then draft a review-only plan",
     "slashSkills": "Skills",
     "slashMcp": "MCP servers",
     "slashEmpty": "No matching commands",

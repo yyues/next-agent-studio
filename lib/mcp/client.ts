@@ -849,13 +849,13 @@ export async function listMcpInvocationLogs(userId: string, limit = 50) {
 
 /**
  * 按角色显式挂载配置加载 MCP 工具。
- * mentions 为消息中 @name 匹配到的 server（未挂载时单次启用）。
+ * mentions 为消息中 @name 或 /name 匹配到的 server（未挂载时单次启用）。
  * 单个 server 失败仅跳过,不阻断对话。
  */
 export async function loadMcpToolsForChat(input: {
   userId: string;
   roleId: string;
-  /** 消息中 @name 提到的 server 名，允许单次启用未挂载 MCP */
+  /** 消息中 @name 或 /name 提到的 server 名，允许单次启用未挂载 MCP */
   mentionNames?: string[];
 }): Promise<McpToolBundle> {
   const servers = (await listEffectiveMcpServers(input.userId, input.roleId).catch(
