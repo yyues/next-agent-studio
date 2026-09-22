@@ -8,8 +8,6 @@ import {
   type UIMessage,
 } from "ai";
 import { getAuthCredentials } from "@/lib/auth";
-import { RESUMABLE_STREAM_ID_HEADER } from "assistant-stream/resumable";
-import { mongoResumableStore, resumableContext } from "@/lib/resumable/context";
 import { z } from "zod";
 import { marked } from "marked";
 import htmlToDocx from "html-to-docx";
@@ -479,31 +477,10 @@ export async function POST(req: Request) {
     .then(() => mcpBundle.close())
     .catch(() => undefined);
 
-  // 可恢复流:live 分支直发客户端——Mongo 版 store 的 append 每 chunk 两次
-  // 库往返、read 为 500ms 轮询,若响应走 store 会让流式慢一个数量级;
-  // backup 分支由后台 producer 落库,仅供断线/刷新后 resume 重放。
-  const streamId = crypto.randomUUID();
-  const source = result.toUIMessageStreamResponse({
+  return result.toUIMessageStreamResponse({
     onError: (error) => (error instanceof Error ? error.message : String(error)),
     // 部分 OpenAI-compatible 服务即使收到 reasoning_effort: none 仍会回传
     // reasoning token。关闭开关时不要把这类内部内容透传到客户端。
     sendReasoning: deepThinking === true,
-  });
-  const [liveBody, backupBody] = source.body!.tee();
-  void resumableContext
-    .run(streamId, () => backupBody)
-    .then(async (consumer) => {
-      // 客户端消费的是 live 分支,consumer 无人读,立即关停其轮询;
-      // 此刻 acquire 已完成,再绑属主不会因 meta 未建而丢失
-      await consumer.cancel();
-      await mongoResumableStore.setOwner(streamId, normalizedUserId);
-    })
-    .catch(() => undefined);
-  return new Response(liveBody, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      [RESUMABLE_STREAM_ID_HEADER]: streamId,
-      "x-accel-buffering": "no",
-    },
   });
 }

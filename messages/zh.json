@@ -12,7 +12,8 @@
     "confirm": "确认",
     "back": "返回",
     "manage": "管理",
-    "toggleSidebar": "切换侧边栏"
+    "toggleSidebar": "切换侧边栏",
+    "localConversationStorageUnavailable": "浏览器本地会话存储不可用，本次聊天不会在刷新后保留。"
   },
   "thread": {
     "welcome": "有什么可以帮你的？",

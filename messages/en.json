@@ -12,7 +12,8 @@
     "confirm": "Confirm",
     "back": "Back",
     "manage": "Manage",
-    "toggleSidebar": "Toggle sidebar"
+    "toggleSidebar": "Toggle sidebar",
+    "localConversationStorageUnavailable": "Local conversation storage is unavailable. This chat will not survive a refresh."
   },
   "thread": {
     "welcome": "How can I help you today?",

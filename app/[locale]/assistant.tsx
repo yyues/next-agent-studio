@@ -14,7 +14,6 @@ import {
 } from "@assistant-ui/react";
 import {
   AssistantChatTransport,
-  createResumableSessionStorage,
   useChatRuntime,
 } from "@assistant-ui/ai-sdk";
 import { createAssistantStreamController } from "assistant-stream";
@@ -23,25 +22,18 @@ import {
   lastAssistantMessageIsCompleteWithToolCalls,
   type UIMessage,
 } from "ai";
-import { useCallback, useEffect, useMemo, type FC, type ReactNode, useRef } from "react";
+import { useCallback, useEffect, useMemo, useState, type FC, type ReactNode, useRef } from "react";
 import { getClientRuntimeContext, setClientRuntimeContext } from "@/lib/client-runtime-context";
-import { CONVERSATION_SAVED_EVENT } from "@/lib/conversation-events";
+import {
+  localConversationStore,
+  reportLocalConversationStorageError,
+} from "@/lib/local-conversation-store";
 import { PlanQuestionsTool } from "@/components/assistant-ui/plan-questions-tool";
-
-type ConversationSummary = {
-  conversationId: string;
-  roleId: string;
-  title: string;
-  updatedAt?: string;
-};
 
 const userId = () => getClientRuntimeContext().userId;
 
 /**
- * adapter.fetch 预取到的会话内容,由 history.load 一次性消费。
- * 领养流程(刷新 /chat/<id>)中 fetch 与 load 命中的是同一条会话,
- * 直接传递可避免第二次重复请求;新会话(空记录)因此瞬时完成加载,
- * 不会出现"骨架屏闪一下又消失"的窗口。一次性消费,后续重新挂载仍走网络取最新。
+ * adapter.fetch 预取到的本地会话内容,由 history.load 一次性消费。
  */
 const prefetchedHistories = new Map<string, { messages: UIMessage[]; roleId?: string }>();
 
@@ -54,7 +46,8 @@ function firstUserTitle(
 ): string {
   for (const message of messages) {
     if (message.role !== "user") continue;
-    const text = (message.content ?? [])
+    const parts = message.content ?? (message as { parts?: readonly { type: string; text?: string }[] }).parts ?? [];
+    const text = parts
       .filter((p): p is { type: "text"; text: string } => p.type === "text")
       .map((p) => p.text)
       .join(" ")
@@ -66,9 +59,7 @@ function firstUserTitle(
 }
 
 /**
- * 线程级 runtime adapter(history):线程挂载时按 remoteId 加载该会话的历史消息。
- * 这样切换会话只重挂载当前线程的聊天运行时,Provider 外的侧边栏/顶栏不受影响。
- * 持久化仍由 runtimeHook 的 onFinish 整体 PUT 承担,append 为 no-op。
+ * 线程级 runtime adapter(history):线程挂载时从 IndexedDB 加载消息。
  */
 const useThreadAdapters = () => {
   const aui = useAui();
@@ -87,22 +78,18 @@ const useThreadAdapters = () => {
           async load(): Promise<{ messages: ReturnType<typeof fa.decode>[] }> {
             const { remoteId } = aui.threadListItem.getState();
             if (!remoteId) return { messages: [] };
-            // 领养 fetch 已取过同一条会话 → 直接消费,跳过重复请求
+            // fetch 已取过同一条会话时直接消费,避免重复 IndexedDB 读取
             const prefetched = prefetchedHistories.get(remoteId);
             if (prefetched) prefetchedHistories.delete(remoteId);
             let stored: UIMessage[] = prefetched?.messages ?? [];
             let storedRoleId: string | undefined = prefetched?.roleId;
             if (!prefetched) {
               try {
-                const res = await fetch(
-                  `/api/conversations/${encodeURIComponent(remoteId)}?userId=${encodeURIComponent(userId())}`,
-                );
-                if (res.ok) {
-                  const data = (await res.json()) as { messages?: UIMessage[]; roleId?: string };
-                  stored = data.messages ?? [];
-                  storedRoleId = data.roleId;
-                }
+                const storedConversation = await localConversationStore.get(userId(), remoteId);
+                stored = storedConversation?.messages ?? [];
+                storedRoleId = storedConversation?.roleId;
               } catch {
+                reportLocalConversationStorageError();
                 stored = [];
               }
             }
@@ -134,40 +121,40 @@ const useThreadAdapters = () => {
 };
 
 /**
- * RemoteThreadListAdapter 实现,桥接现有 /api/conversations CRUD:
- * - list → GET 列表;initialize 直接采用本地 threadId 作为会话 id
- * - rename → PATCH;delete → DELETE;archive/unarchive 后端无对应能力,空实现
- * - generateTitle 客户端截取首条用户消息生成(无需 LLM),随后核心会调 rename 持久化
+ * RemoteThreadListAdapter 实现,使用 IndexedDB 保存会话元数据和消息。
  */
 const createConversationAdapter = (): RemoteThreadListAdapter => ({
   async list() {
-    const res = await fetch(`/api/conversations?userId=${encodeURIComponent(userId())}`);
-    if (!res.ok) throw new Error("Failed to list conversations.");
-    const data = (await res.json()) as { conversations: ConversationSummary[] };
-    return {
-      threads: (data.conversations ?? []).map((c) => ({
+    try {
+      const conversations = await localConversationStore.list(userId());
+      return {
+        threads: conversations.map((c) => ({
         status: "regular" as const,
         remoteId: c.conversationId,
         title: c.title || undefined,
-        lastMessageAt: c.updatedAt ? new Date(c.updatedAt) : undefined,
+          lastMessageAt: new Date(c.updatedAt),
       })),
-    };
+      };
+    } catch {
+      reportLocalConversationStorageError();
+      return { threads: [] };
+    }
   },
 
   async initialize(threadId) {
-    // 新线程沿用本地生成的 id 作为会话主键,首次保存(PUT)时落库
+    try {
+      await localConversationStore.ensure(userId(), threadId, getClientRuntimeContext().roleId);
+    } catch {
+      reportLocalConversationStorageError();
+    }
     return { remoteId: threadId };
   },
 
   async rename(remoteId, newTitle) {
     try {
-      await fetch(`/api/conversations/${encodeURIComponent(remoteId)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: userId(), title: newTitle }),
-      });
+      await localConversationStore.rename(userId(), remoteId, newTitle);
     } catch {
-      // 会话尚未落库时 404/网络失败可容忍,服务端在首次保存时会自动生成标题
+      reportLocalConversationStorageError();
     }
   },
 
@@ -178,10 +165,11 @@ const createConversationAdapter = (): RemoteThreadListAdapter => ({
   async unarchive() {},
 
   async delete(remoteId) {
-    await fetch(
-      `/api/conversations/${encodeURIComponent(remoteId)}?userId=${encodeURIComponent(userId())}`,
-      { method: "DELETE" },
-    );
+    try {
+      await localConversationStore.delete(userId(), remoteId);
+    } catch {
+      reportLocalConversationStorageError();
+    }
   },
 
   async generateTitle(_remoteId, messages) {
@@ -195,27 +183,23 @@ const createConversationAdapter = (): RemoteThreadListAdapter => ({
   unstable_useAdapters: useThreadAdapters,
 
   async fetch(remoteId) {
-    const res = await fetch(
-      `/api/conversations/${encodeURIComponent(remoteId)}?userId=${encodeURIComponent(userId())}`,
-    );
-    if (!res.ok) {
+    try {
+      const data = await localConversationStore.get(userId(), remoteId);
+      if (!data) return { status: "regular" as const, remoteId };
+      prefetchedHistories.set(remoteId, {
+        messages: data.messages,
+        roleId: data.roleId,
+      });
+      return {
+        status: "regular" as const,
+        remoteId,
+        title: data.title || undefined,
+        lastMessageAt: new Date(data.updatedAt),
+      };
+    } catch {
+      reportLocalConversationStorageError();
       return { status: "regular" as const, remoteId };
     }
-    const data = (await res.json()) as {
-      title?: string;
-      messages?: UIMessage[];
-      roleId?: string;
-    };
-    // 预取内容交给 history.load 消费(见 prefetchedHistories)
-    prefetchedHistories.set(remoteId, {
-      messages: data.messages ?? [],
-      roleId: data.roleId,
-    });
-    return {
-      status: "regular" as const,
-      remoteId,
-      title: data.title || undefined,
-    };
   },
 });
 
@@ -229,7 +213,7 @@ type AssistantProps = {
 /**
  * 会话列表型运行时:
  * - 侧边栏通过 ThreadListPrimitive 消费同一运行时,切换/新建/重命名/删除
- *   全部走 adapter(即 /api/conversations),不再由组件自行 fetch 维护列表
+ *   全部走 IndexedDB adapter,不向服务端持久化会话
  * - 历史消息由 adapter 的 unstable_useAdapters(history)在线程挂载时按 remoteId 加载,
  *   Provider 全程保持挂载,切换会话只重渲染会话内容区
  * - 线程切换时 onThreadIdChange 上抛,父组件负责同步路由
@@ -239,13 +223,18 @@ export const Assistant: FC<AssistantProps> = ({ conversationId, onThreadIdChange
   // 当前线程 id:仅取挂载时路由 prop 作初值,之后由线程切换回调维护。
   // (URL 同步走原生 history,page 不会重新取参,渲染期回写会把 ref 重置成旧值)
   const activeIdRef = useRef(conversationId);
+  const [callbacksReady, setCallbacksReady] = useState(false);
+
+  useEffect(() => {
+    setCallbacksReady(true);
+  }, []);
 
   const runtimeHook = useCallback(() => {
     // 运行时上下文里的当前线程(每个线程各自挂载一次 hook),
     // 发消息/保存时从这取实时 remoteId,避免新建线程尚未同步 URL 时写错会话
     const aui = useAui();
     const currentConversationId = () =>
-      aui.threadListItem.getState().remoteId ?? activeIdRef.current;
+      aui.threadListItem.getState().remoteId ?? aui.threadListItem.getState().id;
 
     // 标题兜底:URL 直接挂载的线程(如切角色产生的 /chat/<id>?roleId=...)
     // 不经"new → initialize"链路,运行时的自动标题不会订阅;这里在
@@ -277,65 +266,16 @@ export const Assistant: FC<AssistantProps> = ({ conversationId, onThreadIdChange
         ]),
         // 浏览器原生 Web Speech 听写(Composer 的麦克风按钮由此激活)
         dictation: new WebSpeechDictationAdapter(),
-        // 消息反馈(👍/👎):落库到 /api/feedback,按角色聚合质量数据
-        feedback: {
-          submit: ({ message, type }) => {
-            const context = getClientRuntimeContext();
-            const snapshot = (message.content ?? [])
-              .filter((p): p is { type: "text"; text: string } => p.type === "text")
-              .map((p) => p.text)
-              .join(" ")
-              .slice(0, 500);
-            void fetch("/api/feedback", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                userId: context.userId,
-                conversationId: currentConversationId(),
-                messageId: message.id,
-                roleId: context.roleId,
-                type,
-                snapshot,
-              }),
-            }).catch(() => undefined);
-          },
-        },
       },
       onFinish: ({ messages }: { messages: UIMessage[] }) => {
         if (messages.length === 0) return;
         const context = getClientRuntimeContext();
-        void fetch(`/api/conversations/${encodeURIComponent(currentConversationId())}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            userId: context.userId,
-            roleId: context.roleId,
-            messages,
-          }),
-        })
-          .then((res) => {
-            if (res.ok) {
-              window.dispatchEvent(new CustomEvent(CONVERSATION_SAVED_EVENT));
-            }
-          })
-          .catch(() => undefined);
+        void localConversationStore
+          .save(context.userId, currentConversationId(), context.roleId, messages)
+          .catch(() => reportLocalConversationStorageError());
       },
       transport: new AssistantChatTransport({
         api: "/api/chat",
-        // 可恢复流:流 id 按线程(会话)维度存 sessionStorage,
-        // 刷新/断线后 useChatRuntime 自动经 resume 路由续接未完成的回答
-        resumable: {
-          storage: createResumableSessionStorage({
-            key: () => {
-              const item = aui.threadListItem.getState();
-              return `aui-resumable:${item.remoteId ?? item.id}`;
-            },
-          }),
-          resumeApi: (streamId) => {
-            const userId = getClientRuntimeContext().userId;
-            return `/api/chat/resume/${encodeURIComponent(streamId)}?userId=${encodeURIComponent(userId)}`;
-          },
-        },
         body: () => {
           const context = getClientRuntimeContext();
           return {
@@ -349,10 +289,6 @@ export const Assistant: FC<AssistantProps> = ({ conversationId, onThreadIdChange
           "x-user-id": getClientRuntimeContext().userId,
         }),
       }),
-      onResumeError: (error) => {
-        // 续接失败(流已过期等)不打断会话,历史里仍有已完成的回合
-        console.warn("[assistant] resume stream failed:", error);
-      },
     });
   }, []);
 
@@ -362,12 +298,14 @@ export const Assistant: FC<AssistantProps> = ({ conversationId, onThreadIdChange
     adapter,
     runtimeHook,
     threadId: conversationId,
-    onThreadIdChange: (id) => {
-      if (id && id !== activeIdRef.current) {
-        activeIdRef.current = id;
-        onThreadIdChange?.(id);
-      }
-    },
+    onThreadIdChange: callbacksReady
+      ? (id) => {
+          if (id && id !== activeIdRef.current) {
+            activeIdRef.current = id;
+            onThreadIdChange?.(id);
+          }
+        }
+      : undefined,
   });
 
   return (

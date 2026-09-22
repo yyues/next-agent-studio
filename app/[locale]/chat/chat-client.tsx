@@ -15,6 +15,7 @@ import {
   getClientRuntimeContext,
   setClientRuntimeContext,
 } from "@/lib/client-runtime-context";
+import { LOCAL_CONVERSATION_STORAGE_ERROR_EVENT } from "@/lib/local-conversation-store";
 import { PanelLeftIcon, MenuIcon } from "lucide-react";
 import { useTranslations } from "next-intl";
 
@@ -30,8 +31,6 @@ type ChatClientProps = {
   initialRoleId?: string;
   /** 应用标题(来自 APP_TITLE env,服务端注入) */
   appTitle?: string;
-  /** 服务端确认该 chatId 已落库:刷新时启动窗口显示骨架屏而非新会话欢迎页 */
-  expectHistory?: boolean;
 };
 
 /**
@@ -67,11 +66,17 @@ export const ChatClient: FC<ChatClientProps> = ({
   chatId,
   initialRoleId,
   appTitle = "Agent Studio",
-  expectHistory = false,
 }) => {
   const t = useTranslations("common");
   const { collapsed, toggle } = useSidebarCollapsed();
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [storageUnavailable, setStorageUnavailable] = useState(false);
+
+  useEffect(() => {
+    const markUnavailable = () => setStorageUnavailable(true);
+    window.addEventListener(LOCAL_CONVERSATION_STORAGE_ERROR_EVENT, markUnavailable);
+    return () => window.removeEventListener(LOCAL_CONVERSATION_STORAGE_ERROR_EVENT, markUnavailable);
+  }, []);
 
   // URL roleId 同步到运行时上下文(供 transport / API 使用)
   useEffect(() => {
@@ -146,7 +151,12 @@ export const ChatClient: FC<ChatClientProps> = ({
 
           {/* 对话区 */}
           <div className="min-h-0 flex-1">
-            <Thread expectHistory={expectHistory} />
+            {storageUnavailable ? (
+              <p className="bg-destructive/10 text-destructive px-4 py-2 text-sm" role="alert">
+                {t("localConversationStorageUnavailable")}
+              </p>
+            ) : null}
+            <Thread />
           </div>
         </div>
       </div>

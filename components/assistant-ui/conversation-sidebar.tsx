@@ -126,7 +126,7 @@ const ThreadListItem: FC<{
 
 /**
  * 会话列表侧边栏(ThreadListPrimitive 实现):
- * - 列表/切换/新建/重命名/删除全部走 assistant-ui 运行时(经 adapter 落到 /api/conversations)
+ * - 列表/切换/新建/重命名/删除全部走 assistant-ui 运行时(经 IndexedDB adapter 落地)
  * - ↑/↓ 焦点导航与 Enter 切换由 ThreadListItemPrimitive.Root 内置(roving focus)
  * - 桌面端由父组件控制折叠;移动端以抽屉形式渲染(open 受控)
  */
