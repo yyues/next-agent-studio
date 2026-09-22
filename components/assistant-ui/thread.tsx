@@ -32,6 +32,7 @@ import {
   ComposerSuggestionBridge,
   insertSuggestionChip,
 } from "@/components/assistant-ui/composer-suggestion-bridge";
+import { ComposerPastePlugin } from "@/components/assistant-ui/composer-paste-plugin";
 import {
   ActionBarMorePrimitive,
   ActionBarPrimitive,
@@ -290,6 +291,7 @@ const Composer: FC = () => {
                   建议 chip 外部插入桥(ThreadSuggestions 点击填入) */}
               <ChipSpacingPlugin />
               <ComposerSuggestionBridge />
+              <ComposerPastePlugin />
             </LexicalComposerInput>
             <ComposerAction />
           </div>
