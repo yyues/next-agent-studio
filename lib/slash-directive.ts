@@ -29,11 +29,7 @@ type PositionedSegment = {
 };
 
 /** 扫描单个触发符的全部命中(不校验名称是否已知,由调用方回退) */
-function scanTrigger(
-  text: string,
-  trigger: string,
-  segmentType: string,
-): PositionedSegment[] {
+function scanTrigger(text: string, trigger: string, segmentType: string): PositionedSegment[] {
   const found: PositionedSegment[] = [];
   for (let i = 0; i < text.length; i++) {
     if (text[i] !== trigger) continue;
@@ -57,10 +53,7 @@ function scanTrigger(
   return found;
 }
 
-function buildSegments(
-  text: string,
-  positioned: PositionedSegment[],
-): SlashSegment[] {
+function buildSegments(text: string, positioned: PositionedSegment[]): SlashSegment[] {
   const segments: SlashSegment[] = [];
   let last = 0;
   for (const { start, end, segment } of positioned) {
@@ -87,10 +80,9 @@ export function parseMentionSegments(text: string): SlashSegment[] {
 
 /** 同时识别 /命令 与 @提及(用户气泡 chip 渲染用),按出现位置合并 */
 export function parseDirectiveSegments(text: string): SlashSegment[] {
-  const all = [
-    ...scanTrigger(text, "/", "command"),
-    ...scanTrigger(text, "@", "mention"),
-  ].sort((a, b) => a.start - b.start);
+  const all = [...scanTrigger(text, "/", "command"), ...scanTrigger(text, "@", "mention")].sort(
+    (a, b) => a.start - b.start,
+  );
   return buildSegments(text, all);
 }
 
@@ -113,12 +105,11 @@ export const slashDirectiveFormatter: Unstable_DirectiveFormatter = {
 };
 
 /**
- * "@" 提及(MCP server)formatter:插入 `@名称 `。
- * 尾随空格是必须的:后端名称正则含中文,若无空格,选中 chip 后直接
- * 接着打中文会把后续文字吞进名称导致 @提及 匹配失败。
+ * "@" 提及(MCP server)formatter:序列化为 `@名称`。
+ * Lexical 输入框会在选中指令后插入独立的尾随空格文本节点，既保证
+ * 后端名称解析有边界，也让用户能看到并删除这个空格。
  */
 export const mentionDirectiveFormatter: Unstable_DirectiveFormatter = {
-  serialize: (item) =>
-    `@${(item.metadata?.name as string | undefined) ?? item.label} `,
+  serialize: (item) => `@${(item.metadata?.name as string | undefined) ?? item.label}`,
   parse: (text) => parseMentionSegments(text),
 };

@@ -30,6 +30,8 @@ const mcpServerSchema = new Schema(
     // stdio 型环境变量;值同样以 enc:v1: 密文存储
     env: { type: Map, of: String, default: {} },
     enabled: { type: Boolean, required: true, default: true },
+    /** 是否随角色自动挂载；关闭后仍可通过 @名称 单次调用 */
+    mounted: { type: Boolean, required: true, default: true },
     /** role=角色私有;global=全局库(userId=__system__/roleId=__global__,管理员维护) */
     scope: {
       type: String,
@@ -60,22 +62,20 @@ export type McpServerConfig = {
   /** stdio 型环境变量(值已解密);http 型为空对象 */
   env: Record<string, string>;
   enabled: boolean;
+  /** 自动挂载到聊天；旧数据缺失该字段时按 true 兼容 */
+  mounted: boolean;
 };
 
 /** Map/对象 → 字符串记录(过滤非字符串值) */
 function toStringMap(value: unknown): Record<string, string> {
   if (value instanceof Map) {
     return Object.fromEntries(
-      [...value.entries()].filter(
-        ([, v]) => typeof v === "string",
-      ) as [string, string][],
+      [...value.entries()].filter(([, v]) => typeof v === "string") as [string, string][],
     );
   }
   if (typeof value === "object" && value !== null) {
     return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).filter(
-        ([, v]) => typeof v === "string",
-      ),
+      Object.entries(value as Record<string, unknown>).filter(([, v]) => typeof v === "string"),
     ) as Record<string, string>;
   }
   return {};
@@ -83,10 +83,7 @@ function toStringMap(value: unknown): Record<string, string> {
 
 export function toMcpServerConfig(doc: Record<string, unknown>): McpServerConfig {
   const command = typeof doc.command === "string" ? doc.command : "";
-  const type =
-    doc.type === "stdio" || (!doc.type && command && !doc.url)
-      ? "stdio"
-      : "http";
+  const type = doc.type === "stdio" || (!doc.type && command && !doc.url) ? "stdio" : "http";
 
   return {
     serverId: String(doc.serverId),
@@ -98,8 +95,8 @@ export function toMcpServerConfig(doc: Record<string, unknown>): McpServerConfig
     args: Array.isArray(doc.args) ? doc.args.map(String) : [],
     env: decryptSecretMap(toStringMap(doc.env)),
     enabled: Boolean(doc.enabled),
+    mounted: doc.mounted === undefined ? true : Boolean(doc.mounted),
   };
 }
 
-export const McpServerModel =
-  models.McpServer ?? model("McpServer", mcpServerSchema);
+export const McpServerModel = models.McpServer ?? model("McpServer", mcpServerSchema);

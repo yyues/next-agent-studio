@@ -5,8 +5,9 @@ import { getClientRuntimeContext } from "@/lib/client-runtime-context";
 
 /**
  * "/" 命令注册表(客户端):
- * 汇总当前角色的 技能 + MCP 服务器,供
- * - Composer 斜杠面板(列出/过滤)
+ * 汇总当前角色的技能与 MCP 服务器,供
+ * - Composer 斜杠面板（仅技能）
+ * - Composer @ 面板（仅 MCP）
  * - 输入框镜像高亮 & 对话历史 chip(校验 /name 是否已知命令)
  * 共用。数据来自现有只读接口,roleId 变化时重新拉取。
  */
@@ -89,26 +90,24 @@ export const useCommandRegistry = create<CommandRegistryState>((set, get) => ({
             type?: "http" | "stdio";
             command?: string;
             args?: string[];
+            enabled: boolean;
           }[];
         };
         for (const s of data.servers ?? []) {
+          if (!s.enabled) continue;
           commands.push({
             type: "mcp",
             id: s.serverId,
             name: s.name,
             label: s.name,
             description:
-              s.type === "stdio"
-                ? [s.command, ...(s.args ?? [])].filter(Boolean).join(" ")
-                : s.url,
+              s.type === "stdio" ? [s.command, ...(s.args ?? [])].filter(Boolean).join(" ") : s.url,
           });
         }
       }
 
       const knownNames = new Set(
-        commands.map((c) => c.name.toLowerCase()).concat(
-          commands.map((c) => c.id.toLowerCase()),
-        ),
+        commands.map((c) => c.name.toLowerCase()).concat(commands.map((c) => c.id.toLowerCase())),
       );
       set({ roleId, loading: false, commands, knownNames });
     })();

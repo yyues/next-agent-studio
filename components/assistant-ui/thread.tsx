@@ -14,10 +14,12 @@ import { AssistantAttachment } from "@/components/assistant-ui/attachment";
 import { GenerateDocumentResult } from "@/components/assistant-ui/generate-document-tool";
 import { slashDirectiveFormatter } from "@/lib/slash-directive";
 import { LexicalComposerInput } from "@assistant-ui/react-lexical";
-import { ChipSpacingPlugin } from "@/components/assistant-ui/chip-spacing-plugin";
+import {
+  ChipSpacingPlugin,
+  insertSpaceAfterSelectedDirective,
+} from "@/components/assistant-ui/chip-spacing-plugin";
 import { useLexicalComposerInputHistory } from "@/components/assistant-ui/composer-input-history";
 import { DeepThinkingToggle } from "@/components/assistant-ui/deep-thinking-toggle";
-import { McpPicker } from "@/components/assistant-ui/mcp-picker";
 import { ThinkingIndicator } from "@/components/thinking-indicator";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -40,7 +42,6 @@ import {
   ErrorPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
-  useAui,
   useAuiState,
 } from "@assistant-ui/react";
 import {
@@ -65,8 +66,7 @@ import { type FC, useEffect, useState } from "react";
 // Startup exposes a loading placeholder thread; treat it as a new chat so
 // the composer mounts centered. Loads after startup keep the docked layout.
 const isNewChatView = (s: AssistantState) =>
-  s.thread.messages.length === 0 &&
-  (!s.thread.isLoading || s.threads.isLoading);
+  s.thread.messages.length === 0 && (!s.thread.isLoading || s.threads.isLoading);
 
 // A switched thread that is still fetching its history: skeleton, not welcome.
 const isHistoryLoadingView = (s: AssistantState) =>
@@ -84,26 +84,24 @@ const ThreadHistorySkeleton: FC = () => {
       className="animate-in fade-in fill-mode-both flex flex-col [animation-delay:150ms] animation-duration-[200ms]"
     >
       <span className="sr-only">{t("loadingConversation")}</span>
-    <div className="flex animate-pulse flex-col gap-y-6 motion-reduce:animate-none">
-      <div className="bg-muted ml-auto h-9 w-2/5 rounded-xl" />
-      <div className="flex flex-col gap-y-2">
-        <div className="bg-muted h-4 w-11/12 rounded-md" />
-        <div className="bg-muted h-4 w-4/5 rounded-md" />
-        <div className="bg-muted h-4 w-3/5 rounded-md" />
-      </div>
-      <div className="bg-muted ml-auto h-9 w-1/3 rounded-xl" />
-      <div className="flex flex-col gap-y-2">
-        <div className="bg-muted h-4 w-10/12 rounded-md" />
-        <div className="bg-muted h-4 w-2/3 rounded-md" />
+      <div className="flex animate-pulse flex-col gap-y-6 motion-reduce:animate-none">
+        <div className="bg-muted ml-auto h-9 w-2/5 rounded-xl" />
+        <div className="flex flex-col gap-y-2">
+          <div className="bg-muted h-4 w-11/12 rounded-md" />
+          <div className="bg-muted h-4 w-4/5 rounded-md" />
+          <div className="bg-muted h-4 w-3/5 rounded-md" />
+        </div>
+        <div className="bg-muted ml-auto h-9 w-1/3 rounded-xl" />
+        <div className="flex flex-col gap-y-2">
+          <div className="bg-muted h-4 w-10/12 rounded-md" />
+          <div className="bg-muted h-4 w-2/3 rounded-md" />
+        </div>
       </div>
     </div>
-  </div>
   );
 };
 
-export const Thread: FC<{ expectHistory?: boolean }> = ({
-  expectHistory = false,
-}) => {
+export const Thread: FC<{ expectHistory?: boolean }> = ({ expectHistory = false }) => {
   const isEmpty = useAuiState(isNewChatView);
   const isHistoryLoading = useAuiState(isHistoryLoadingView);
   const composerIsEmpty = useAuiState((s) => s.composer.isEmpty);
@@ -118,8 +116,7 @@ export const Thread: FC<{ expectHistory?: boolean }> = ({
   // 服务端确认 URL 是已有会话:启动"占位→领养"窗口显示骨架屏,
   // 而不是新会话欢迎页(否则刷新已有会话会先闪一下欢迎页)。
   // 仅启动窗口生效——之后用户点"新对话"回到占位线程时仍显示欢迎页。
-  const isStartupLoading =
-    expectHistory && !startupDone && isPlaceholderNew && isEmpty;
+  const isStartupLoading = expectHistory && !startupDone && isPlaceholderNew && isEmpty;
 
   const showWelcome = isEmpty && !isStartupLoading;
   const showSkeleton = isHistoryLoading || isStartupLoading;
@@ -150,20 +147,14 @@ export const Thread: FC<{ expectHistory?: boolean }> = ({
           {showWelcome && <ThreadWelcome />}
           {showSkeleton && <ThreadHistorySkeleton />}
 
-          <div
-            data-slot="aui_message-group"
-            className="mb-14 flex flex-col gap-y-6 empty:hidden"
-          >
-            <ThreadPrimitive.Messages>
-              {() => <ThreadMessage />}
-            </ThreadPrimitive.Messages>
+          <div data-slot="aui_message-group" className="mb-14 flex flex-col gap-y-6 empty:hidden">
+            <ThreadPrimitive.Messages>{() => <ThreadMessage />}</ThreadPrimitive.Messages>
           </div>
 
           <ThreadPrimitive.ViewportFooter
             className={cn(
               "aui-thread-viewport-footer bg-background flex flex-col gap-4 overflow-visible pb-4 md:pb-6",
-              !showWelcome &&
-                "sticky bottom-0 mt-auto rounded-t-(--composer-radius)",
+              !showWelcome && "sticky bottom-0 mt-auto rounded-t-(--composer-radius)",
             )}
           >
             <ThreadScrollToBottom />
@@ -241,12 +232,10 @@ const ThreadSuggestions: FC = () => {
   useEffect(() => {
     const onUpdate = () => setRoleId(getClientRuntimeContext().roleId);
     window.addEventListener(RUNTIME_CONTEXT_UPDATED_EVENT, onUpdate);
-    return () =>
-      window.removeEventListener(RUNTIME_CONTEXT_UPDATED_EVENT, onUpdate);
+    return () => window.removeEventListener(RUNTIME_CONTEXT_UPDATED_EVENT, onUpdate);
   }, []);
 
-  const suggestions =
-    roles.find((r) => r.roleId === roleId)?.suggestions ?? [];
+  const suggestions = roles.find((r) => r.roleId === roleId)?.suggestions ?? [];
 
   if (suggestions.length === 0) return null;
 
@@ -291,6 +280,9 @@ const Composer: FC = () => {
               aria-label="Message input"
               formatter={slashDirectiveFormatter}
               directiveChip={LexicalSlashChip}
+              directivePluginProps={{
+                onDirectiveSelect: insertSpaceAfterSelectedDirective,
+              }}
               onKeyDown={inputHistory.onKeyDown}
             >
               {/* chip 插入末尾时补尾随空格,光标不贴边;
@@ -313,7 +305,6 @@ const ComposerAction: FC = () => {
       <div className="flex items-center gap-1.5">
         <ComposerAddAttachment />
         <DeepThinkingToggle />
-        <McpPicker />
       </div>
       <div className="flex items-center gap-1.5">
         <AuiIf condition={(s) => s.thread.capabilities.dictation}>
@@ -399,13 +390,9 @@ const MessageError: FC = () => {
 function useThinkingLabel() {
   return useAuiState((s) => {
     if (s.message.status?.type !== "running") return undefined;
-    const pending = s.message.parts.find(
-      (p) => p.type === "tool-call" && p.result === undefined,
-    );
+    const pending = s.message.parts.find((p) => p.type === "tool-call" && p.result === undefined);
     if (pending?.type === "tool-call") return `调用 ${prettyToolName(pending.toolName)}`;
-    const hasText = s.message.parts.some(
-      (p) => p.type === "text" && p.text.length > 0,
-    );
+    const hasText = s.message.parts.some((p) => p.type === "text" && p.text.length > 0);
     return hasText ? undefined : "深度思考中";
   });
 }
@@ -450,9 +437,7 @@ const ReasoningBlock: FC<{ text: string }> = ({ text }) => {
         <ChevronRightIcon className="size-3.5 transition-transform group-open:rotate-90" />
         {t("thinkingProcess")}
       </summary>
-      <div className="mt-2 whitespace-pre-wrap text-[13px] leading-relaxed">
-        {text}
-      </div>
+      <div className="mt-2 whitespace-pre-wrap text-[13px] leading-relaxed">{text}</div>
     </details>
   );
 };
@@ -476,8 +461,7 @@ const AssistantMessage: FC = () => {
         <AssistantThinking />
         <MessagePrimitive.Parts>
           {({ part }) => {
-            if (part.type === "reasoning")
-              return <ReasoningBlock text={part.text} />;
+            if (part.type === "reasoning") return <ReasoningBlock text={part.text} />;
             if (part.type === "text") return <StreamdownText />;
             if (part.type === "tool-call") {
               // 文件生成工具族:专用渲染器(生成中/完成的文档 tile + 预览/下载)。
@@ -490,10 +474,7 @@ const AssistantMessage: FC = () => {
               )
                 return (
                   <div className="order-last">
-                    <GenerateDocumentResult
-                      args={part.args}
-                      result={part.result ?? null}
-                    />
+                    <GenerateDocumentResult args={part.args} result={part.result ?? null} />
                   </div>
                 );
               return part.toolUI ?? <ToolFallback {...part} />;
@@ -555,10 +536,7 @@ const AssistantActionBar: FC = () => {
         </TooltipIconButton>
       </ActionBarPrimitive.Reload>
       {/* 消息反馈:提交后图标高亮(data-submitted) */}
-      <ActionBarPrimitive.FeedbackPositive
-        asChild
-        aria-label={t("feedbackPositive")}
-      >
+      <ActionBarPrimitive.FeedbackPositive asChild aria-label={t("feedbackPositive")}>
         <TooltipIconButton
           tooltip={t("feedbackPositive")}
           className="data-[submitted=true]:text-primary"
@@ -566,10 +544,7 @@ const AssistantActionBar: FC = () => {
           <ThumbsUpIcon className="size-4" />
         </TooltipIconButton>
       </ActionBarPrimitive.FeedbackPositive>
-      <ActionBarPrimitive.FeedbackNegative
-        asChild
-        aria-label={t("feedbackNegative")}
-      >
+      <ActionBarPrimitive.FeedbackNegative asChild aria-label={t("feedbackNegative")}>
         <TooltipIconButton
           tooltip={t("feedbackNegative")}
           className="data-[submitted=true]:text-destructive"
@@ -579,10 +554,7 @@ const AssistantActionBar: FC = () => {
       </ActionBarPrimitive.FeedbackNegative>
       <ActionBarMorePrimitive.Root>
         <ActionBarMorePrimitive.Trigger asChild>
-          <TooltipIconButton
-            tooltip={t("more")}
-            className="data-[state=open]:bg-accent"
-          >
+          <TooltipIconButton tooltip={t("more")} className="data-[state=open]:bg-accent">
             <MoreHorizontalIcon />
           </TooltipIconButton>
         </ActionBarMorePrimitive.Trigger>
@@ -665,11 +637,7 @@ const EditComposer: FC = () => {
         />
         <div className="aui-edit-composer-footer mx-2.5 mb-2.5 flex items-center gap-1.5 self-end">
           <ComposerPrimitive.Cancel asChild>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-8 rounded-full px-3.5"
-            >
+            <Button variant="ghost" size="sm" className="h-8 rounded-full px-3.5">
               {t("cancel")}
             </Button>
           </ComposerPrimitive.Cancel>
@@ -684,10 +652,7 @@ const EditComposer: FC = () => {
   );
 };
 
-const BranchPicker: FC<BranchPickerPrimitive.Root.Props> = ({
-  className,
-  ...rest
-}) => {
+const BranchPicker: FC<BranchPickerPrimitive.Root.Props> = ({ className, ...rest }) => {
   const t = useTranslations("thread");
 
   return (

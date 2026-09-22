@@ -42,10 +42,7 @@ const userId = () => getClientRuntimeContext().userId;
  * 直接传递可避免第二次重复请求;新会话(空记录)因此瞬时完成加载,
  * 不会出现"骨架屏闪一下又消失"的窗口。一次性消费,后续重新挂载仍走网络取最新。
  */
-const prefetchedHistories = new Map<
-  string,
-  { messages: UIMessage[]; roleId?: string }
->();
+const prefetchedHistories = new Map<string, { messages: UIMessage[]; roleId?: string }>();
 
 /** 从消息列表推导标题:首条用户消息文本前 30 字符(generateTitle 与兜底重命名共用) */
 function firstUserTitle(
@@ -143,9 +140,7 @@ const useThreadAdapters = () => {
  */
 const createConversationAdapter = (): RemoteThreadListAdapter => ({
   async list() {
-    const res = await fetch(
-      `/api/conversations?userId=${encodeURIComponent(userId())}`,
-    );
+    const res = await fetch(`/api/conversations?userId=${encodeURIComponent(userId())}`);
     if (!res.ok) throw new Error("Failed to list conversations.");
     const data = (await res.json()) as { conversations: ConversationSummary[] };
     return {
@@ -239,139 +234,126 @@ type AssistantProps = {
  * - 线程切换时 onThreadIdChange 上抛,父组件负责同步路由
  * - 角色取自运行时上下文(实时读取):当前会话内切换角色后,后续消息即用新角色
  */
-export const Assistant: FC<AssistantProps> = ({
-  conversationId,
-  onThreadIdChange,
-  children,
-}) => {
+export const Assistant: FC<AssistantProps> = ({ conversationId, onThreadIdChange, children }) => {
   // 当前线程 id:仅取挂载时路由 prop 作初值,之后由线程切换回调维护。
   // (URL 同步走原生 history,page 不会重新取参,渲染期回写会把 ref 重置成旧值)
   const activeIdRef = useRef(conversationId);
 
-  const runtimeHook = useCallback(
-    () => {
-      // 运行时上下文里的当前线程(每个线程各自挂载一次 hook),
-      // 发消息/保存时从这取实时 remoteId,避免新建线程尚未同步 URL 时写错会话
-      const aui = useAui();
-      const currentConversationId = () =>
-        aui.threadListItem.getState().remoteId ?? activeIdRef.current;
+  const runtimeHook = useCallback(() => {
+    // 运行时上下文里的当前线程(每个线程各自挂载一次 hook),
+    // 发消息/保存时从这取实时 remoteId,避免新建线程尚未同步 URL 时写错会话
+    const aui = useAui();
+    const currentConversationId = () =>
+      aui.threadListItem.getState().remoteId ?? activeIdRef.current;
 
-      // 标题兜底:URL 直接挂载的线程(如切角色产生的 /chat/<id>?roleId=...)
-      // 不经"new → initialize"链路,运行时的自动标题不会订阅;这里在
-      // 标题仍为空且已有用户消息时主动重命名(规则与 generateTitle 一致)
-      const itemTitle = useAuiState((s) => s.threadListItem.title);
-      const derivedTitle = useAuiState((s) => firstUserTitle(s.thread.messages));
-      useEffect(() => {
-        if (itemTitle || !derivedTitle) return;
-        const state = aui.threadListItem.getState();
-        if (state.status === "new") return; // 内置自动标题链路负责
-        try {
-          void aui.threads.item({ id: state.id }).rename(derivedTitle);
-        } catch {
-          // 状态竞争(如刚好被删除)忽略
-        }
-      }, [itemTitle, derivedTitle, aui]);
+    // 标题兜底:URL 直接挂载的线程(如切角色产生的 /chat/<id>?roleId=...)
+    // 不经"new → initialize"链路,运行时的自动标题不会订阅;这里在
+    // 标题仍为空且已有用户消息时主动重命名(规则与 generateTitle 一致)
+    const itemTitle = useAuiState((s) => s.threadListItem.title);
+    const derivedTitle = useAuiState((s) => firstUserTitle(s.thread.messages));
+    useEffect(() => {
+      if (itemTitle || !derivedTitle) return;
+      const state = aui.threadListItem.getState();
+      if (state.status === "new") return; // 内置自动标题链路负责
+      try {
+        void aui.threads.item({ id: state.id }).rename(derivedTitle);
+      } catch {
+        // 状态竞争(如刚好被删除)忽略
+      }
+    }, [itemTitle, derivedTitle, aui]);
 
-      return useChatRuntime({
-        // 工具循环自动续发;MCP 工具审批(HITL)通过/拒绝后同样自动续发
-        sendAutomaticallyWhen: (m) =>
-          lastAssistantMessageIsCompleteWithToolCalls(m) ||
-          lastAssistantMessageIsCompleteWithApprovalResponses(m),
-        // 官方附件适配器:图片转 data URL(视觉输入),文本包成标签注入;
-        // 不配置时默认接受全部类型,多数模型会报错(官方文档警告)
-        adapters: {
-          attachments: new CompositeAttachmentAdapter([
-            new SimpleImageAttachmentAdapter(),
-            new SimpleTextAttachmentAdapter(),
-          ]),
-          // 浏览器原生 Web Speech 听写(Composer 的麦克风按钮由此激活)
-          dictation: new WebSpeechDictationAdapter(),
-          // 消息反馈(👍/👎):落库到 /api/feedback,按角色聚合质量数据
-          feedback: {
-            submit: ({ message, type }) => {
-              const context = getClientRuntimeContext();
-              const snapshot = (message.content ?? [])
-                .filter(
-                  (p): p is { type: "text"; text: string } => p.type === "text",
-                )
-                .map((p) => p.text)
-                .join(" ")
-                .slice(0, 500);
-              void fetch("/api/feedback", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  userId: context.userId,
-                  conversationId: currentConversationId(),
-                  messageId: message.id,
-                  roleId: context.roleId,
-                  type,
-                  snapshot,
-                }),
-              }).catch(() => undefined);
-            },
-          },
-        },
-        onFinish: ({ messages }: { messages: UIMessage[] }) => {
-          if (messages.length === 0) return;
-          const context = getClientRuntimeContext();
-          void fetch(
-            `/api/conversations/${encodeURIComponent(currentConversationId())}`,
-            {
-              method: "PUT",
+    return useChatRuntime({
+      // 工具循环自动续发;MCP 工具审批(HITL)通过/拒绝后同样自动续发
+      sendAutomaticallyWhen: (m) =>
+        lastAssistantMessageIsCompleteWithToolCalls(m) ||
+        lastAssistantMessageIsCompleteWithApprovalResponses(m),
+      // 官方附件适配器:图片转 data URL(视觉输入),文本包成标签注入;
+      // 不配置时默认接受全部类型,多数模型会报错(官方文档警告)
+      adapters: {
+        attachments: new CompositeAttachmentAdapter([
+          new SimpleImageAttachmentAdapter(),
+          new SimpleTextAttachmentAdapter(),
+        ]),
+        // 浏览器原生 Web Speech 听写(Composer 的麦克风按钮由此激活)
+        dictation: new WebSpeechDictationAdapter(),
+        // 消息反馈(👍/👎):落库到 /api/feedback,按角色聚合质量数据
+        feedback: {
+          submit: ({ message, type }) => {
+            const context = getClientRuntimeContext();
+            const snapshot = (message.content ?? [])
+              .filter((p): p is { type: "text"; text: string } => p.type === "text")
+              .map((p) => p.text)
+              .join(" ")
+              .slice(0, 500);
+            void fetch("/api/feedback", {
+              method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 userId: context.userId,
+                conversationId: currentConversationId(),
+                messageId: message.id,
                 roleId: context.roleId,
-                messages,
+                type,
+                snapshot,
               }),
-            },
-          )
-            .then((res) => {
-              if (res.ok) {
-                window.dispatchEvent(new CustomEvent(CONVERSATION_SAVED_EVENT));
-              }
-            })
-            .catch(() => undefined);
+            }).catch(() => undefined);
+          },
         },
-        transport: new AssistantChatTransport({
-          api: "/api/chat",
-          // 可恢复流:流 id 按线程(会话)维度存 sessionStorage,
-          // 刷新/断线后 useChatRuntime 自动经 resume 路由续接未完成的回答
-          resumable: {
-            storage: createResumableSessionStorage({
-              key: () => {
-                const item = aui.threadListItem.getState();
-                return `aui-resumable:${item.remoteId ?? item.id}`;
-              },
-            }),
-            resumeApi: (streamId) => {
-              const userId = getClientRuntimeContext().userId;
-              return `/api/chat/resume/${encodeURIComponent(streamId)}?userId=${encodeURIComponent(userId)}`;
-            },
-          },
-          body: () => {
-            const context = getClientRuntimeContext();
-            return {
-              userId: context.userId,
-              roleId: context.roleId,
-              conversationId: currentConversationId(),
-              deepThinking: context.deepThinking === true,
-              mcpServerIds: context.mcpServerIds,
-            };
-          },
-          headers: () => ({
-            "x-user-id": getClientRuntimeContext().userId,
+      },
+      onFinish: ({ messages }: { messages: UIMessage[] }) => {
+        if (messages.length === 0) return;
+        const context = getClientRuntimeContext();
+        void fetch(`/api/conversations/${encodeURIComponent(currentConversationId())}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userId: context.userId,
+            roleId: context.roleId,
+            messages,
           }),
-        }),
-        onResumeError: (error) => {
-          // 续接失败(流已过期等)不打断会话,历史里仍有已完成的回合
-          console.warn("[assistant] resume stream failed:", error);
+        })
+          .then((res) => {
+            if (res.ok) {
+              window.dispatchEvent(new CustomEvent(CONVERSATION_SAVED_EVENT));
+            }
+          })
+          .catch(() => undefined);
+      },
+      transport: new AssistantChatTransport({
+        api: "/api/chat",
+        // 可恢复流:流 id 按线程(会话)维度存 sessionStorage,
+        // 刷新/断线后 useChatRuntime 自动经 resume 路由续接未完成的回答
+        resumable: {
+          storage: createResumableSessionStorage({
+            key: () => {
+              const item = aui.threadListItem.getState();
+              return `aui-resumable:${item.remoteId ?? item.id}`;
+            },
+          }),
+          resumeApi: (streamId) => {
+            const userId = getClientRuntimeContext().userId;
+            return `/api/chat/resume/${encodeURIComponent(streamId)}?userId=${encodeURIComponent(userId)}`;
+          },
         },
-      });
-    },
-    [],
-  );
+        body: () => {
+          const context = getClientRuntimeContext();
+          return {
+            userId: context.userId,
+            roleId: context.roleId,
+            conversationId: currentConversationId(),
+            deepThinking: context.deepThinking === true,
+          };
+        },
+        headers: () => ({
+          "x-user-id": getClientRuntimeContext().userId,
+        }),
+      }),
+      onResumeError: (error) => {
+        // 续接失败(流已过期等)不打断会话,历史里仍有已完成的回合
+        console.warn("[assistant] resume stream failed:", error);
+      },
+    });
+  }, []);
 
   const adapter = useMemo(createConversationAdapter, []);
 
@@ -387,9 +369,5 @@ export const Assistant: FC<AssistantProps> = ({
     },
   });
 
-  return (
-    <AssistantRuntimeProvider runtime={runtime}>
-      {children}
-    </AssistantRuntimeProvider>
-  );
+  return <AssistantRuntimeProvider runtime={runtime}>{children}</AssistantRuntimeProvider>;
 };

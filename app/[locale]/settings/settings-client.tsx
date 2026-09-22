@@ -4,21 +4,22 @@ import { useState, type FC } from "react";
 import { useTranslations } from "next-intl";
 import { useSearchParams } from "next/navigation";
 import { useRouter } from "@/i18n/navigation";
-import { ArrowLeftIcon, BotIcon, CpuIcon } from "lucide-react";
+import { ArrowLeftIcon, BotIcon, CpuIcon, PlugZapIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ProvidersPanel } from "@/components/settings/providers-panel";
 import { RolesWorkspace } from "@/components/settings/roles-workspace";
+import { McpStudio } from "@/components/settings/mcp-studio";
 
-type SettingsTab = "providers" | "roles";
+type SettingsTab = "providers" | "roles" | "mcp";
 
 const LAST_TAB_KEY = "settings-last-tab";
 
 function resolveInitialTab(urlTab: string | null): SettingsTab {
-  if (urlTab === "roles" || urlTab === "providers") return urlTab;
+  if (urlTab === "roles" || urlTab === "providers" || urlTab === "mcp") return urlTab;
   // URL 未指定时用上次访问的标签(齿轮直达时不丢上下文)
   if (typeof window !== "undefined") {
     const saved = window.localStorage.getItem(LAST_TAB_KEY);
-    if (saved === "roles" || saved === "providers") return saved;
+    if (saved === "roles" || saved === "providers" || saved === "mcp") return saved;
   }
   return "providers";
 }
@@ -41,7 +42,9 @@ export const SettingsClient: FC<{ appTitle: string }> = ({ appTitle }) => {
     setTab(next);
     window.localStorage.setItem(LAST_TAB_KEY, next);
     // replace 不产生历史记录,保持返回键行为可预测
-    router.replace(`/settings?tab=${next}`, { scroll: false });
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("tab", next);
+    router.replace(`/settings?${params.toString()}`, { scroll: false });
   };
 
   return (
@@ -51,33 +54,27 @@ export const SettingsClient: FC<{ appTitle: string }> = ({ appTitle }) => {
         <div className="mx-auto flex h-12 max-w-4xl items-center gap-2 px-4">
           <button
             type="button"
-            onClick={() => router.push("/chat")}
+            onClick={() => router.back()}
             className="text-muted-foreground hover:text-foreground hover:bg-muted inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-sm transition-colors"
           >
             <ArrowLeftIcon className="size-4" />
             <span className="hidden sm:inline">{t("backToChat")}</span>
           </button>
           <div className="flex-1" />
-          <span className="text-muted-foreground text-xs font-medium">
-            {appTitle}
-          </span>
+          <span className="text-muted-foreground text-xs font-medium">{appTitle}</span>
         </div>
       </header>
 
       <main
         className={cn(
           "mx-auto px-4 pb-16",
-          tab === "roles" ? "max-w-4xl" : "max-w-2xl",
+          tab === "roles" || tab === "mcp" ? "max-w-6xl" : "max-w-2xl",
         )}
       >
         {/* 页头 */}
         <div className="mt-10">
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {t("pageTitle")}
-          </h1>
-          <p className="text-muted-foreground mt-1.5 text-sm">
-            {t("pageDesc")}
-          </p>
+          <h1 className="text-2xl font-semibold tracking-tight">{t("pageTitle")}</h1>
+          <p className="text-muted-foreground mt-1.5 text-sm">{t("pageDesc")}</p>
         </div>
 
         {/* 分段式标签页:滑动指示器 + 深链同步 */}
@@ -88,15 +85,21 @@ export const SettingsClient: FC<{ appTitle: string }> = ({ appTitle }) => {
         >
           <span
             aria-hidden
-            className="bg-background shadow-sm absolute inset-y-1 start-1 w-[calc(50%-0.25rem)] rounded-full transition-transform duration-200 ease-out motion-reduce:transition-none"
+            className="bg-background shadow-sm absolute inset-y-1 start-1 w-[calc(33.333%-0.25rem)] rounded-full transition-transform duration-200 ease-out motion-reduce:transition-none"
             style={{
-              transform: tab === "roles" ? "translateX(100%)" : undefined,
+              transform:
+                tab === "roles"
+                  ? "translateX(100%)"
+                  : tab === "mcp"
+                    ? "translateX(200%)"
+                    : undefined,
             }}
           />
           {(
             [
               { id: "providers", icon: CpuIcon, label: t("tabProviders") },
               { id: "roles", icon: BotIcon, label: t("tabRoles") },
+              { id: "mcp", icon: PlugZapIcon, label: t("tabMcpStudio") },
             ] as const
           ).map(({ id, icon: Icon, label }) => {
             const active = tab === id;
@@ -109,9 +112,7 @@ export const SettingsClient: FC<{ appTitle: string }> = ({ appTitle }) => {
                 onClick={() => switchTab(id)}
                 className={cn(
                   "relative z-10 flex h-9 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-full text-sm font-medium outline-none transition-colors duration-150 focus-visible:ring-primary/50 focus-visible:ring-2",
-                  active
-                    ? "text-foreground"
-                    : "text-muted-foreground hover:text-foreground",
+                  active ? "text-foreground" : "text-muted-foreground hover:text-foreground",
                 )}
               >
                 <Icon className="size-3.5" />
@@ -122,9 +123,11 @@ export const SettingsClient: FC<{ appTitle: string }> = ({ appTitle }) => {
         </div>
 
         {/* 面板:key 变化 remount → 入场动画;角色为双栏工作区 */}
-        <div key={tab} className="aui-anim-item">
+        <div key={tab} className="aui-anim-item min-w-0 max-w-full overflow-hidden">
           {tab === "roles" ? (
             <RolesWorkspace initialRoleId={searchParams.get("role") ?? undefined} />
+          ) : tab === "mcp" ? (
+            <McpStudio roleId={searchParams.get("role") ?? undefined} />
           ) : (
             <ProvidersPanel />
           )}

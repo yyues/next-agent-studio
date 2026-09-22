@@ -11,8 +11,10 @@ import { AdminClient } from "@/components/admin/admin-client";
  */
 export default async function AdminPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ locale: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { locale } = await params;
 
@@ -26,9 +28,12 @@ export default async function AdminPage({
     redirect(`/${locale}/chat`);
   }
 
+  const sp = await searchParams;
+  const initialTab = sp.tab === "mcp" ? "mcp" : "resources";
+
   return (
     <Suspense>
-      <AdminClient />
+      <AdminClient initialTab={initialTab} />
     </Suspense>
   );
 }

@@ -1,12 +1,6 @@
 "use client";
 
-import {
-  useEffect,
-  useMemo,
-  useState,
-  type FC,
-  type ReactNode,
-} from "react";
+import { useEffect, useMemo, useState, type FC, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import { ComposerPrimitive } from "@assistant-ui/react";
 import {
@@ -40,7 +34,7 @@ function toItems(commands: CommandEntry[]): SlashItem[] {
 
 /**
  * "/" 命令面板(Slack/Discord 式):
- * - 输入 / 弹出当前角色的 技能 + MCP 服务器,继续输入即过滤
+ * - 输入 / 弹出当前角色的技能；MCP 统一通过 @ 面板显式调用
  * - 选中插入 /名称 (Directive 行为,自定义 formatter)
  * - ↑↓ 导航 / Enter 选中 / Esc 关闭、ARIA combobox 均由原语内置
  * 输入框本体使用官方 LexicalComposerInput(react-lexical),
@@ -62,20 +56,24 @@ export const ComposerSlash: FC = () => {
     };
     sync();
     window.addEventListener(RUNTIME_CONTEXT_UPDATED_EVENT, sync);
-    return () =>
-      window.removeEventListener(RUNTIME_CONTEXT_UPDATED_EVENT, sync);
+    return () => window.removeEventListener(RUNTIME_CONTEXT_UPDATED_EVENT, sync);
   }, [ensureLoaded]);
 
-  // 无 categories → 空查询也走 search() 平铺全部;渲染层按 type 视觉分组
+  const skillCommands = useMemo(
+    () => commands.filter((command) => command.type === "skill"),
+    [commands],
+  );
+
+  // 无 categories → 空查询也走 search() 平铺全部技能
   const adapter = useMemo(
     () => ({
       categories: () => [],
       categoryItems: () => [],
       search: (query: string) => {
         const lower = query.trim().toLowerCase();
-        if (!lower) return toItems(commands);
+        if (!lower) return toItems(skillCommands);
         return toItems(
-          commands.filter(
+          skillCommands.filter(
             (c) =>
               c.name.toLowerCase().includes(lower) ||
               c.label.toLowerCase().includes(lower) ||
@@ -84,7 +82,7 @@ export const ComposerSlash: FC = () => {
         );
       },
     }),
-    [commands],
+    [skillCommands],
   );
 
   if (!roleId) return null;
@@ -97,15 +95,10 @@ export const ComposerSlash: FC = () => {
       className="bg-popover text-popover-foreground border-border animate-in fade-in slide-in-from-bottom-1 absolute bottom-full left-0 z-40 mb-2 max-h-72 w-80 overflow-y-auto rounded-xl border p-1.5 shadow-lg duration-150 motion-reduce:animate-none"
       aria-label={t("slashLabel")}
     >
-      <ComposerPrimitive.Unstable_TriggerPopover.Directive
-        formatter={slashDirectiveFormatter}
-      />
+      <ComposerPrimitive.Unstable_TriggerPopover.Directive formatter={slashDirectiveFormatter} />
       <ComposerPrimitive.Unstable_TriggerPopoverItems>
         {(items) => (
-          <SlashList
-            items={items as SlashItem[]}
-            loading={loading && items.length === 0}
-          />
+          <SlashList items={items as SlashItem[]} loading={loading && items.length === 0} />
         )}
       </ComposerPrimitive.Unstable_TriggerPopoverItems>
     </ComposerPrimitive.Unstable_TriggerPopover>
@@ -137,10 +130,7 @@ export const LexicalSlashChip: FC<{
   />
 );
 
-const SlashList: FC<{ items: SlashItem[]; loading: boolean }> = ({
-  items,
-  loading,
-}) => {
+const SlashList: FC<{ items: SlashItem[]; loading: boolean }> = ({ items, loading }) => {
   const t = useTranslations("thread");
 
   if (loading) {
@@ -152,11 +142,7 @@ const SlashList: FC<{ items: SlashItem[]; loading: boolean }> = ({
     );
   }
   if (items.length === 0) {
-    return (
-      <p className="text-muted-foreground px-3 py-6 text-center text-xs">
-        {t("slashEmpty")}
-      </p>
-    );
+    return <p className="text-muted-foreground px-3 py-6 text-center text-xs">{t("slashEmpty")}</p>;
   }
 
   const skills = items.filter((i) => i.type === "skill");
@@ -185,9 +171,7 @@ const SlashList: FC<{ items: SlashItem[]; loading: boolean }> = ({
             <span
               className={cn(
                 "flex size-6 shrink-0 items-center justify-center rounded-md",
-                item.type === "skill"
-                  ? "bg-primary/10 text-primary"
-                  : "bg-chart-2/15 text-chart-2",
+                item.type === "skill" ? "bg-primary/10 text-primary" : "bg-chart-2/15 text-chart-2",
               )}
             >
               {item.type === "skill" ? (
@@ -214,20 +198,8 @@ const SlashList: FC<{ items: SlashItem[]; loading: boolean }> = ({
 
   return (
     <>
-      {group(
-        "skill",
-        t("slashSkills"),
-        <SparklesIcon className="size-3" key="i" />,
-        skills,
-        0,
-      )}
-      {group(
-        "mcp",
-        t("slashMcp"),
-        <PlugZapIcon className="size-3" key="i" />,
-        mcps,
-        skills.length,
-      )}
+      {group("skill", t("slashSkills"), <SparklesIcon className="size-3" key="i" />, skills, 0)}
+      {group("mcp", t("slashMcp"), <PlugZapIcon className="size-3" key="i" />, mcps, skills.length)}
     </>
   );
 };

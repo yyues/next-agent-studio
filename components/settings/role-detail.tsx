@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type FC } from "react";
 import { useTranslations } from "next-intl";
+import { useRouter } from "@/i18n/navigation";
 import { getClientRuntimeContext } from "@/lib/client-runtime-context";
 import { useRolesStore, type RoleSummary } from "@/lib/roles-store";
 import { cn } from "@/lib/utils";
@@ -74,6 +75,9 @@ type McpServerInfo = {
   command?: string;
   args?: string[];
   enabled: boolean;
+  mounted: boolean;
+  inheritedMounted?: boolean;
+  mountOverride?: boolean;
   headerKeys: string[];
   envKeys?: string[];
   /** own=本角色私有;global=全局库引用;role=自己其他角色引用 */
@@ -118,14 +122,11 @@ export type RoleDetailProps = {
   onMobileBack?: () => void;
 };
 
-export const RoleDetail: FC<RoleDetailProps> = ({
-  roleId,
-  onDeleted,
-  onMobileBack,
-}) => {
+export const RoleDetail: FC<RoleDetailProps> = ({ roleId, onDeleted, onMobileBack }) => {
   const t = useTranslations("roles");
   const tc = useTranslations("common");
   const ts = useTranslations("settings");
+  const router = useRouter();
 
   const [detail, setDetail] = useState<RoleDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -133,9 +134,7 @@ export const RoleDetail: FC<RoleDetailProps> = ({
   const applyRoleUpdated = useRolesStore((s) => s.applyRoleUpdated);
 
   /* auto-save state */
-  const [saveStatus, setSaveStatus] = useState<
-    "idle" | "saving" | "saved" | "error"
-  >("idle");
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /* form fields */
@@ -148,9 +147,7 @@ export const RoleDetail: FC<RoleDetailProps> = ({
 
   /* delete dialog */
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const [deleteSkillTarget, setDeleteSkillTarget] = useState<SkillInfo | null>(
-    null,
-  );
+  const [deleteSkillTarget, setDeleteSkillTarget] = useState<SkillInfo | null>(null);
   /* 发布到全局库的目标(409 覆盖确认弹窗用) */
   const [publishTarget, setPublishTarget] = useState<{
     skillId: string;
@@ -158,8 +155,7 @@ export const RoleDetail: FC<RoleDetailProps> = ({
     version: string;
   } | null>(null);
   const [publishBusy, setPublishBusy] = useState(false);
-  const [deleteResourceTarget, setDeleteResourceTarget] =
-    useState<ResourceInfo | null>(null);
+  const [deleteResourceTarget, setDeleteResourceTarget] = useState<ResourceInfo | null>(null);
   /* 删除请求进行中:确认按钮 loading,防重复提交;
    * ref 提供同帧级同步守卫,避免连续 Enter/双击在 state 异步更新前穿透 */
   const [deleteBusy, setDeleteBusy] = useState(false);
@@ -224,14 +220,11 @@ export const RoleDetail: FC<RoleDetailProps> = ({
     const next = isPublished ? "private" : "public";
     try {
       const userId = getClientRuntimeContext().userId;
-      const res = await fetch(
-        `/api/settings/roles/${encodeURIComponent(roleId)}`,
-        {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ userId, visibility: next }),
-        },
-      );
+      const res = await fetch(`/api/settings/roles/${encodeURIComponent(roleId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, visibility: next }),
+      });
       if (!res.ok) {
         const err = (await res.json()) as { error?: string };
         throw new Error(err.error || t("saveFailed"));
@@ -246,34 +239,37 @@ export const RoleDetail: FC<RoleDetailProps> = ({
 
   /* ----- data loading ----- */
 
-  const loadDetail = useCallback(async (opts?: { silent?: boolean }) => {
-    const silent = opts?.silent ?? false;
-    // silent:已有数据时静默刷新,不把页面闪回全屏 loading
-    if (!silent) setLoading(true);
-    setError("");
-    try {
-      const userId = getClientRuntimeContext().userId;
-      const res = await fetch(
-        `/api/settings/roles/${encodeURIComponent(roleId)}?userId=${encodeURIComponent(userId)}`,
-      );
-      if (!res.ok) {
-        const err = (await res.json()) as { error?: string };
-        throw new Error(err.error || "Failed to load role");
+  const loadDetail = useCallback(
+    async (opts?: { silent?: boolean }) => {
+      const silent = opts?.silent ?? false;
+      // silent:已有数据时静默刷新,不把页面闪回全屏 loading
+      if (!silent) setLoading(true);
+      setError("");
+      try {
+        const userId = getClientRuntimeContext().userId;
+        const res = await fetch(
+          `/api/settings/roles/${encodeURIComponent(roleId)}?userId=${encodeURIComponent(userId)}`,
+        );
+        if (!res.ok) {
+          const err = (await res.json()) as { error?: string };
+          throw new Error(err.error || "Failed to load role");
+        }
+        const data = (await res.json()) as RoleDetail;
+        setDetail(data);
+        setDisplayName(data.role.displayName);
+        setDescription(data.role.description ?? "");
+        setSystemPrompt(data.role.systemPrompt);
+        setEnabled(data.role.enabled);
+        setPriority(data.role.priority);
+        setSuggestions((data.role.suggestions ?? []).join("\n"));
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Unknown error");
+      } finally {
+        if (!silent) setLoading(false);
       }
-      const data = (await res.json()) as RoleDetail;
-      setDetail(data);
-      setDisplayName(data.role.displayName);
-      setDescription(data.role.description ?? "");
-      setSystemPrompt(data.role.systemPrompt);
-      setEnabled(data.role.enabled);
-      setPriority(data.role.priority);
-      setSuggestions((data.role.suggestions ?? []).join("\n"));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Unknown error");
-    } finally {
-      if (!silent) setLoading(false);
-    }
-  }, [roleId]);
+    },
+    [roleId],
+  );
 
   useEffect(() => {
     void loadDetail();
@@ -287,14 +283,11 @@ export const RoleDetail: FC<RoleDetailProps> = ({
       setSaveStatus("saving");
       try {
         const userId = getClientRuntimeContext().userId;
-        const res = await fetch(
-          `/api/settings/roles/${encodeURIComponent(roleId)}`,
-          {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ userId, ...fields }),
-          },
-        );
+        const res = await fetch(`/api/settings/roles/${encodeURIComponent(roleId)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userId, ...fields }),
+        });
         if (!res.ok) throw new Error("save failed");
         // 用服务端返回的最新角色同步共享缓存(列表/开场建议立即反映编辑)
         const data = (await res.json()) as { role: RoleSummary };
@@ -344,11 +337,7 @@ export const RoleDetail: FC<RoleDetailProps> = ({
   /* ----- upload(技能与资源共用,带进度/去重/覆盖确认) ----- */
 
   const performUpload = useCallback(
-    async (
-      kind: "skill" | "resource",
-      file: File,
-      opts?: { overwrite?: boolean },
-    ) => {
+    async (kind: "skill" | "resource", file: File, opts?: { overwrite?: boolean }) => {
       const base =
         kind === "skill"
           ? `/api/settings/skills/${encodeURIComponent(roleId)}`
@@ -363,27 +352,17 @@ export const RoleDetail: FC<RoleDetailProps> = ({
         if (kind === "resource" && body?.warnings?.length) {
           // 上传成功但未能建索引(扫描件/超页数):警示但不按失败处理
           setUploadNotice({ type: "warning", text: t("resourceIndexWarning") });
-          setTimeout(
-            () =>
-              setUploadNotice((n) => (n?.type === "warning" ? null : n)),
-            8000,
-          );
+          setTimeout(() => setUploadNotice((n) => (n?.type === "warning" ? null : n)), 8000);
         } else {
           setUploadNotice({ type: "success", text: t("uploadSuccess") });
-          setTimeout(
-            () => setUploadNotice((n) => (n?.type === "success" ? null : n)),
-            4000,
-          );
+          setTimeout(() => setUploadNotice((n) => (n?.type === "success" ? null : n)), 4000);
         }
         await loadDetail({ silent: true });
       } catch (e) {
         if (e instanceof UploadRejected) {
           if (e.code === "DUPLICATE_CONTENT") {
             setUploadNotice({ type: "error", text: t("duplicateContent") });
-          } else if (
-            e.code === "SKILL_ID_EXISTS" ||
-            e.code === "RESOURCE_EXISTS"
-          ) {
+          } else if (e.code === "SKILL_ID_EXISTS" || e.code === "RESOURCE_EXISTS") {
             // 同名不同内容:弹确认,确认后带 overwrite 重传
             setOverwriteTarget({
               kind,
@@ -474,10 +453,7 @@ export const RoleDetail: FC<RoleDetailProps> = ({
         type: "success",
         text: t("publishSkillDone", { name: skill.title }),
       });
-      setTimeout(
-        () => setUploadNotice((n) => (n?.type === "success" ? null : n)),
-        4000,
-      );
+      setTimeout(() => setUploadNotice((n) => (n?.type === "success" ? null : n)), 4000);
     } catch (e) {
       setUploadNotice({
         type: "error",
@@ -509,10 +485,7 @@ export const RoleDetail: FC<RoleDetailProps> = ({
   };
 
   /** 设置/取消"以此为准"权威标记(每角色独占;取消时传 false) */
-  const handleToggleAuthoritative = async (
-    resourceId: string,
-    next: boolean,
-  ) => {
+  const handleToggleAuthoritative = async (resourceId: string, next: boolean) => {
     try {
       const res = await fetch(
         `/api/settings/roles/${encodeURIComponent(roleId)}/resources/${encodeURIComponent(resourceId)}`,
@@ -575,8 +548,7 @@ export const RoleDetail: FC<RoleDetailProps> = ({
     const t = s.trim();
     if (
       t.length >= 2 &&
-      ((t.startsWith('"') && t.endsWith('"')) ||
-        (t.startsWith("'") && t.endsWith("'")))
+      ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'")))
     )
       return t.slice(1, -1).trim();
     return t;
@@ -639,18 +611,15 @@ export const RoleDetail: FC<RoleDetailProps> = ({
   const handleMcpSave = async () => {
     try {
       const userId = getClientRuntimeContext().userId;
-      const res = await fetch(
-        `/api/settings/roles/${encodeURIComponent(roleId)}/mcp`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            userId,
-            serverId: mcpEditing?.serverId,
-            ...mcpFormPayload(),
-          }),
-        },
-      );
+      const res = await fetch(`/api/settings/roles/${encodeURIComponent(roleId)}/mcp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId,
+          serverId: mcpEditing?.serverId,
+          ...mcpFormPayload(),
+        }),
+      });
       if (!res.ok) {
         const err = (await res.json()) as { error?: string };
         throw new Error(err.error || t("saveFailed"));
@@ -666,14 +635,11 @@ export const RoleDetail: FC<RoleDetailProps> = ({
     setMcpTesting(true);
     setMcpTestResult("");
     try {
-      const res = await fetch(
-        `/api/settings/roles/${encodeURIComponent(roleId)}/mcp`,
-        {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(mcpFormPayload()),
-        },
-      );
+      const res = await fetch(`/api/settings/roles/${encodeURIComponent(roleId)}/mcp`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(mcpFormPayload()),
+      });
       const data = (await res.json()) as {
         toolNames?: string[];
         error?: string;
@@ -707,6 +673,52 @@ export const RoleDetail: FC<RoleDetailProps> = ({
       }),
     });
     await loadMcpServers();
+  };
+
+  const handleMcpToggleMounted = async (server: McpServerInfo) => {
+    try {
+      const userId = getClientRuntimeContext().userId;
+      const res = await fetch(
+        `/api/settings/roles/${encodeURIComponent(roleId)}/mcp/${encodeURIComponent(server.serverId)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userId,
+            ref: server.ref,
+            mounted: !server.mounted,
+          }),
+        },
+      );
+      if (!res.ok) {
+        const data = (await res.json()) as { error?: string };
+        throw new Error(data.error || "挂载配置保存失败");
+      }
+      await loadMcpServers();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "挂载配置保存失败");
+    }
+  };
+
+  const handleMcpInheritMounted = async (server: McpServerInfo) => {
+    try {
+      const userId = getClientRuntimeContext().userId;
+      const res = await fetch(
+        `/api/settings/roles/${encodeURIComponent(roleId)}/mcp/${encodeURIComponent(server.serverId)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userId, ref: server.ref, inherit: true }),
+        },
+      );
+      if (!res.ok) {
+        const data = (await res.json()) as { error?: string };
+        throw new Error(data.error || "挂载配置保存失败");
+      }
+      await loadMcpServers();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "挂载配置保存失败");
+    }
   };
 
   const handleMcpDelete = async (server: McpServerInfo) => {
@@ -782,9 +794,7 @@ export const RoleDetail: FC<RoleDetailProps> = ({
             <UserIcon className="text-muted-foreground size-5 shrink-0" />
           )}
           <div className="min-w-0">
-            <h2 className="truncate text-xl font-semibold tracking-tight">
-              {role.displayName}
-            </h2>
+            <h2 className="truncate text-xl font-semibold tracking-tight">{role.displayName}</h2>
             <div className="mt-1 flex flex-wrap items-center gap-2">
               <span className="text-muted-foreground bg-muted rounded px-1.5 py-0.5 font-mono text-xs">
                 {role.roleId.slice(0, 12)}
@@ -828,339 +838,325 @@ export const RoleDetail: FC<RoleDetailProps> = ({
         )}
       </div>
 
-        {readonly && (
-          <p className="text-muted-foreground bg-muted/50 mb-6 flex items-center gap-2 rounded-lg border px-3 py-2 text-xs">
-            <ShieldCheckIcon className="size-3.5 shrink-0" />
-            {t("readonlyHint")}
-          </p>
-        )}
+      {readonly && (
+        <p className="text-muted-foreground bg-muted/50 mb-6 flex items-center gap-2 rounded-lg border px-3 py-2 text-xs">
+          <ShieldCheckIcon className="size-3.5 shrink-0" />
+          {t("readonlyHint")}
+        </p>
+      )}
 
-        {error && (
-          <p className="text-destructive mb-4 text-sm">{error}</p>
-        )}
+      {error && <p className="text-destructive mb-4 text-sm">{error}</p>}
 
-        {uploadNotice && (
-          <p
-            role="alert"
-            className={cn(
-              "mb-4 rounded-md px-3 py-2 text-xs",
-              uploadNotice.type === "success"
-                ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                : uploadNotice.type === "warning"
-                  ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
-                  : "bg-destructive/10 text-destructive",
-            )}
-          >
-            {uploadNotice.text}
-          </p>
-        )}
-
-        {/* basic info card */}
-        <section className="border-border/60 bg-card mb-6 rounded-lg border p-5">
-          <h2 className="mb-4 text-sm font-medium">{t("detail")}</h2>
-          {isBuiltin && (
-            <p className="text-muted-foreground mb-3 text-xs">
-              {t("builtinHint")}
-            </p>
+      {uploadNotice && (
+        <p
+          role="alert"
+          className={cn(
+            "mb-4 rounded-md px-3 py-2 text-xs",
+            uploadNotice.type === "success"
+              ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+              : uploadNotice.type === "warning"
+                ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                : "bg-destructive/10 text-destructive",
           )}
-          <div className="grid gap-4">
-            <label className="grid gap-1.5">
-              <span className="text-xs text-muted-foreground">
-                {t("displayName")}
-              </span>
-              <input
+        >
+          {uploadNotice.text}
+        </p>
+      )}
+
+      {/* basic info card */}
+      <section className="border-border/60 bg-card mb-6 rounded-lg border p-5">
+        <h2 className="mb-4 text-sm font-medium">{t("detail")}</h2>
+        {isBuiltin && <p className="text-muted-foreground mb-3 text-xs">{t("builtinHint")}</p>}
+        <div className="grid gap-4">
+          <label className="grid gap-1.5">
+            <span className="text-xs text-muted-foreground">{t("displayName")}</span>
+            <input
               disabled={readonly}
-                value={displayName}
-                autoComplete="off"
+              value={displayName}
+              autoComplete="off"
+              onChange={(e) => {
+                setDisplayName(e.target.value);
+                scheduleSave({ displayName: e.target.value });
+              }}
+              className="bg-background border-input h-9 rounded-md border px-2.5 text-sm outline-none disabled:opacity-50"
+            />
+          </label>
+          <label className="grid gap-1.5">
+            <span className="text-xs text-muted-foreground">{t("description")}</span>
+            <textarea
+              disabled={readonly}
+              value={description}
+              autoComplete="off"
+              onChange={(e) => {
+                setDescription(e.target.value);
+                scheduleSave({ description: e.target.value });
+              }}
+              className="bg-background border-input min-h-16 rounded-md border px-2.5 py-2 text-sm outline-none disabled:opacity-50"
+              placeholder={t("descriptionPlaceholder")}
+              rows={2}
+            />
+          </label>
+          <label className="grid gap-1.5">
+            <span className="text-xs text-muted-foreground">{t("systemPrompt")}</span>
+            <textarea
+              disabled={readonly}
+              value={systemPrompt}
+              autoComplete="off"
+              onChange={(e) => {
+                setSystemPrompt(e.target.value);
+                scheduleSave({ systemPrompt: e.target.value });
+              }}
+              className="bg-background border-input min-h-32 rounded-md border px-2.5 py-2 text-sm outline-none disabled:opacity-50"
+              placeholder={t("systemPromptPlaceholder")}
+              rows={6}
+            />
+          </label>
+          <label className="grid gap-1.5">
+            <span className="text-xs text-muted-foreground">{t("suggestions")}</span>
+            <textarea
+              disabled={readonly}
+              value={suggestions}
+              autoComplete="off"
+              onChange={(e) => {
+                setSuggestions(e.target.value);
+                scheduleSave({
+                  suggestions: e.target.value.split("\n"),
+                });
+              }}
+              className="bg-background border-input min-h-20 rounded-md border px-2.5 py-2 text-sm outline-none disabled:opacity-50"
+              placeholder={t("suggestionsPlaceholder")}
+              rows={4}
+            />
+          </label>
+          <div className="grid grid-cols-2 gap-4">
+            <label className="grid gap-1.5">
+              <span className="text-xs text-muted-foreground">{t("priority")}</span>
+              <input
+                disabled={readonly}
+                type="number"
+                value={priority}
                 onChange={(e) => {
-                  setDisplayName(e.target.value);
-                  scheduleSave({ displayName: e.target.value });
+                  const v = Number(e.target.value);
+                  setPriority(v);
+                  scheduleSave({ priority: v });
                 }}
                 className="bg-background border-input h-9 rounded-md border px-2.5 text-sm outline-none disabled:opacity-50"
               />
             </label>
-            <label className="grid gap-1.5">
-              <span className="text-xs text-muted-foreground">
-                {t("description")}
-              </span>
-              <textarea
-              disabled={readonly}
-                value={description}
-                autoComplete="off"
-                onChange={(e) => {
-                  setDescription(e.target.value);
-                  scheduleSave({ description: e.target.value });
-                }}
-                className="bg-background border-input min-h-16 rounded-md border px-2.5 py-2 text-sm outline-none disabled:opacity-50"
-                placeholder={t("descriptionPlaceholder")}
-                rows={2}
-              />
-            </label>
-            <label className="grid gap-1.5">
-              <span className="text-xs text-muted-foreground">
-                {t("systemPrompt")}
-              </span>
-              <textarea
-              disabled={readonly}
-                value={systemPrompt}
-                autoComplete="off"
-                onChange={(e) => {
-                  setSystemPrompt(e.target.value);
-                  scheduleSave({ systemPrompt: e.target.value });
-                }}
-                className="bg-background border-input min-h-32 rounded-md border px-2.5 py-2 text-sm outline-none disabled:opacity-50"
-                placeholder={t("systemPromptPlaceholder")}
-                rows={6}
-              />
-            </label>
-            <label className="grid gap-1.5">
-              <span className="text-xs text-muted-foreground">
-                {t("suggestions")}
-              </span>
-              <textarea
-              disabled={readonly}
-                value={suggestions}
-                autoComplete="off"
-                onChange={(e) => {
-                  setSuggestions(e.target.value);
-                  scheduleSave({
-                    suggestions: e.target.value.split("\n"),
-                  });
-                }}
-                className="bg-background border-input min-h-20 rounded-md border px-2.5 py-2 text-sm outline-none disabled:opacity-50"
-                placeholder={t("suggestionsPlaceholder")}
-                rows={4}
-              />
-            </label>
-            <div className="grid grid-cols-2 gap-4">
-              <label className="grid gap-1.5">
-                <span className="text-xs text-muted-foreground">
-                  {t("priority")}
-                </span>
-                <input
+            <label className="flex items-center gap-2 self-end pb-1">
+              <input
                 disabled={readonly}
-                  type="number"
-                  value={priority}
-                  onChange={(e) => {
-                    const v = Number(e.target.value);
-                    setPriority(v);
-                    scheduleSave({ priority: v });
-                  }}
-                  className="bg-background border-input h-9 rounded-md border px-2.5 text-sm outline-none disabled:opacity-50"
-                />
-              </label>
-              <label className="flex items-center gap-2 self-end pb-1">
-                <input
-                disabled={readonly}
-                  type="checkbox"
-                  checked={enabled}
-                  onChange={(e) => {
-                    setEnabled(e.target.checked);
-                    scheduleSave({ enabled: e.target.checked });
-                  }}
-                  className="size-4"
-                />
-                <span className="text-sm">{t("enabled")}</span>
-              </label>
-            </div>
+                type="checkbox"
+                checked={enabled}
+                onChange={(e) => {
+                  setEnabled(e.target.checked);
+                  scheduleSave({ enabled: e.target.checked });
+                }}
+                className="size-4"
+              />
+              <span className="text-sm">{t("enabled")}</span>
+            </label>
           </div>
-        </section>
+        </div>
+      </section>
 
-        {/* skills card */}
-        <section className="border-border/60 bg-card mb-6 rounded-lg border p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-sm font-medium">{t("skills")}</h2>
-            {!readonly && (
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="gap-1.5"
-                  onClick={() => setSkillPickerOpen(true)}
-                >
-                  <ListPlusIcon className="size-3.5" />
-                  {t("selectFromLibrary")}
-                </Button>
-                <FilePickerButton
-                  accept=".zip"
-                  onSelect={handleSkillUpload}
-                  label={t("uploadSkill")}
-                  disabled={!!upload}
-                  busy={upload?.kind === "skill"}
-                />
-              </div>
-            )}
-          </div>
-          {upload?.kind === "skill" && <UploadProgress upload={upload} t={t} />}
-          {skills.length === 0 ? (
-            <p className="text-muted-foreground text-sm">{t("noSkills")}</p>
-          ) : (
-            <div className="grid gap-2">
-              {skills.map((s) => (
-                <div
-                  key={s.skillId + (s.ref ?? "")}
-                  className="border-border/40 flex min-w-0 items-start justify-between gap-3 rounded-md border px-3 py-2.5"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium">{s.title}</span>
-                      {s.version && (
-                        <span className="text-muted-foreground bg-muted rounded px-1 py-0.5 text-[10px]">
-                          v{s.version}
-                        </span>
-                      )}
-                      {s.source === "global" && (
-                        <span className="bg-chart-1/10 text-chart-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px]">
-                          <GlobeIcon className="size-2.5" />
-                          {t("sourceGlobal")}
-                        </span>
-                      )}
-                      {s.source === "role" && (
-                        <span className="bg-muted text-muted-foreground inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px]">
-                          <LinkIcon className="size-2.5" />
-                          {t("refBadge")}
-                        </span>
-                      )}
-                    </div>
-                    {s.description && (
-                      <p className="text-muted-foreground mt-0.5 line-clamp-1 text-xs">
-                        {s.description}
-                      </p>
-                    )}
-                  </div>
-                  {s.source !== "own" || readonly ? null : (
-                    <div className="flex shrink-0 items-center gap-1">
-                      {isAdminAuth && (
-                        <button
-                          type="button"
-                          onClick={() => void handlePublishSkill(s)}
-                          disabled={publishBusy}
-                          className="text-muted-foreground hover:text-chart-1 hover:bg-chart-1/10 inline-flex size-6 items-center justify-center rounded transition-colors"
-                          title={t("publishSkillHint")}
-                          aria-label={t("publishSkill")}
-                        >
-                          <UploadIcon className="size-3" />
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => setDeleteSkillTarget(s)}
-                        className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 inline-flex size-6 items-center justify-center rounded transition-colors"
-                      >
-                        <Trash2Icon className="size-3" />
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-
-        {/* resources card */}
-        <section className="border-border/60 bg-card rounded-lg border p-5">
-          <div className="mb-1 flex items-center justify-between">
-            <h2 className="text-sm font-medium">{t("resources")}</h2>
-            {!readonly && (
+      {/* skills card */}
+      <section className="border-border/60 bg-card mb-6 rounded-lg border p-5">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-sm font-medium">{t("skills")}</h2>
+          {!readonly && (
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                onClick={() => setSkillPickerOpen(true)}
+              >
+                <ListPlusIcon className="size-3.5" />
+                {t("selectFromLibrary")}
+              </Button>
               <FilePickerButton
-                accept=".pdf,.md,.txt"
-                onSelect={handleResourceUpload}
-                label={t("uploadResource")}
+                accept=".zip"
+                onSelect={handleSkillUpload}
+                label={t("uploadSkill")}
                 disabled={!!upload}
-                busy={upload?.kind === "resource"}
+                busy={upload?.kind === "skill"}
               />
-            )}
-          </div>
-          <p className="text-muted-foreground mb-4 text-xs">
-            {t("resourceHint")}
-          </p>
-          {upload?.kind === "resource" && (
-            <UploadProgress upload={upload} t={t} />
-          )}
-          {resources.length === 0 ? (
-            <p className="text-muted-foreground text-sm">{t("noResources")}</p>
-          ) : (
-            <div className="grid gap-2">
-              {resources.map((r) => (
-                <div
-                  key={r.resourceId}
-                  className="border-border/40 flex min-w-0 items-start justify-between gap-3 rounded-md border px-3 py-2.5"
-                >
-                  <div className="min-w-0 flex-1">
-                    <span className="text-sm font-medium">{r.fileName}</span>
-                    {r.authoritative && (
-                      <span
-                        className="ml-1.5 inline-flex items-center gap-0.5 rounded bg-chart-1/10 px-1.5 py-0.5 align-middle text-[10px] text-chart-1"
-                        title={t("resourceAuthoritativeHint")}
-                      >
-                        <CrownIcon className="size-2.5" />
-                        {t("resourceAuthoritative")}
-                      </span>
-                    )}
-                    {r.indexWarning && (
-                      <span
-                        className="ml-1.5 inline-flex rounded bg-amber-500/10 px-1.5 py-0.5 align-middle text-[10px] text-amber-600 dark:text-amber-400"
-                        title={t("resourceScanned")}
-                      >
-                        {t("resourceWarningBadge")}
-                      </span>
-                    )}
-                    {r.createdAt && (
-                      <p className="text-muted-foreground mt-0.5 text-xs">
-                        {new Date(r.createdAt).toLocaleString()}
-                      </p>
-                    )}
-                  </div>
-                  {readonly ? null : (
-                    <div className="flex shrink-0 items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          void handleToggleAuthoritative(
-                            r.resourceId,
-                            !r.authoritative,
-                          )
-                        }
-                        className={cn(
-                          "inline-flex size-6 items-center justify-center rounded transition-colors",
-                          r.authoritative
-                            ? "bg-chart-1/10 text-chart-1"
-                            : "text-muted-foreground hover:bg-chart-1/10 hover:text-chart-1",
-                        )}
-                        title={
-                          r.authoritative
-                            ? t("resourceUnsetAuthoritative")
-                            : t("resourceSetAuthoritative")
-                        }
-                        aria-label={
-                          r.authoritative
-                            ? t("resourceUnsetAuthoritative")
-                            : t("resourceSetAuthoritative")
-                        }
-                      >
-                        <CrownIcon className="size-3" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setDeleteResourceTarget(r)}
-                        className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 inline-flex size-6 items-center justify-center rounded transition-colors"
-                      >
-                        <Trash2Icon className="size-3" />
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ))}
             </div>
           )}
-        </section>
+        </div>
+        {upload?.kind === "skill" && <UploadProgress upload={upload} t={t} />}
+        {skills.length === 0 ? (
+          <p className="text-muted-foreground text-sm">{t("noSkills")}</p>
+        ) : (
+          <div className="grid gap-2">
+            {skills.map((s) => (
+              <div
+                key={s.skillId + (s.ref ?? "")}
+                className="border-border/40 flex min-w-0 items-start justify-between gap-3 rounded-md border px-3 py-2.5"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium">{s.title}</span>
+                    {s.version && (
+                      <span className="text-muted-foreground bg-muted rounded px-1 py-0.5 text-[10px]">
+                        v{s.version}
+                      </span>
+                    )}
+                    {s.source === "global" && (
+                      <span className="bg-chart-1/10 text-chart-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px]">
+                        <GlobeIcon className="size-2.5" />
+                        {t("sourceGlobal")}
+                      </span>
+                    )}
+                    {s.source === "role" && (
+                      <span className="bg-muted text-muted-foreground inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px]">
+                        <LinkIcon className="size-2.5" />
+                        {t("refBadge")}
+                      </span>
+                    )}
+                  </div>
+                  {s.description && (
+                    <p className="text-muted-foreground mt-0.5 line-clamp-1 text-xs">
+                      {s.description}
+                    </p>
+                  )}
+                </div>
+                {s.source !== "own" || readonly ? null : (
+                  <div className="flex shrink-0 items-center gap-1">
+                    {isAdminAuth && (
+                      <button
+                        type="button"
+                        onClick={() => void handlePublishSkill(s)}
+                        disabled={publishBusy}
+                        className="text-muted-foreground hover:text-chart-1 hover:bg-chart-1/10 inline-flex size-6 items-center justify-center rounded transition-colors"
+                        title={t("publishSkillHint")}
+                        aria-label={t("publishSkill")}
+                      >
+                        <UploadIcon className="size-3" />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setDeleteSkillTarget(s)}
+                      className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 inline-flex size-6 items-center justify-center rounded transition-colors"
+                    >
+                      <Trash2Icon className="size-3" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
 
-        {/* mcp servers card */}
-        <section className="border-border/60 bg-card mt-6 rounded-lg border p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-sm font-medium">MCP Servers</h2>
+      {/* resources card */}
+      <section className="border-border/60 bg-card rounded-lg border p-5">
+        <div className="mb-1 flex items-center justify-between">
+          <h2 className="text-sm font-medium">{t("resources")}</h2>
+          {!readonly && (
+            <FilePickerButton
+              accept=".pdf,.md,.txt"
+              onSelect={handleResourceUpload}
+              label={t("uploadResource")}
+              disabled={!!upload}
+              busy={upload?.kind === "resource"}
+            />
+          )}
+        </div>
+        <p className="text-muted-foreground mb-4 text-xs">{t("resourceHint")}</p>
+        {upload?.kind === "resource" && <UploadProgress upload={upload} t={t} />}
+        {resources.length === 0 ? (
+          <p className="text-muted-foreground text-sm">{t("noResources")}</p>
+        ) : (
+          <div className="grid gap-2">
+            {resources.map((r) => (
+              <div
+                key={r.resourceId}
+                className="border-border/40 flex min-w-0 items-start justify-between gap-3 rounded-md border px-3 py-2.5"
+              >
+                <div className="min-w-0 flex-1">
+                  <span className="text-sm font-medium">{r.fileName}</span>
+                  {r.authoritative && (
+                    <span
+                      className="ml-1.5 inline-flex items-center gap-0.5 rounded bg-chart-1/10 px-1.5 py-0.5 align-middle text-[10px] text-chart-1"
+                      title={t("resourceAuthoritativeHint")}
+                    >
+                      <CrownIcon className="size-2.5" />
+                      {t("resourceAuthoritative")}
+                    </span>
+                  )}
+                  {r.indexWarning && (
+                    <span
+                      className="ml-1.5 inline-flex rounded bg-amber-500/10 px-1.5 py-0.5 align-middle text-[10px] text-amber-600 dark:text-amber-400"
+                      title={t("resourceScanned")}
+                    >
+                      {t("resourceWarningBadge")}
+                    </span>
+                  )}
+                  {r.createdAt && (
+                    <p className="text-muted-foreground mt-0.5 text-xs">
+                      {new Date(r.createdAt).toLocaleString()}
+                    </p>
+                  )}
+                </div>
+                {readonly ? null : (
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => void handleToggleAuthoritative(r.resourceId, !r.authoritative)}
+                      className={cn(
+                        "inline-flex size-6 items-center justify-center rounded transition-colors",
+                        r.authoritative
+                          ? "bg-chart-1/10 text-chart-1"
+                          : "text-muted-foreground hover:bg-chart-1/10 hover:text-chart-1",
+                      )}
+                      title={
+                        r.authoritative
+                          ? t("resourceUnsetAuthoritative")
+                          : t("resourceSetAuthoritative")
+                      }
+                      aria-label={
+                        r.authoritative
+                          ? t("resourceUnsetAuthoritative")
+                          : t("resourceSetAuthoritative")
+                      }
+                    >
+                      <CrownIcon className="size-3" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDeleteResourceTarget(r)}
+                      className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 inline-flex size-6 items-center justify-center rounded transition-colors"
+                    >
+                      <Trash2Icon className="size-3" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* mcp servers card */}
+      <section className="border-border/60 bg-card mt-6 rounded-lg border p-5">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-sm font-medium">MCP Servers</h2>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => {
+                router.replace(`/settings?tab=mcp&role=${encodeURIComponent(roleId)}`);
+              }}
+            >
+              调试 MCP
+            </Button>
             {!readonly && (
-              <div className="flex items-center gap-2">
+              <>
                 <Button
                   variant="outline"
                   size="sm"
@@ -1188,18 +1184,19 @@ export const RoleDetail: FC<RoleDetailProps> = ({
                   <PlusIcon className="size-3.5" />
                   添加 MCP
                 </Button>
-              </div>
+              </>
             )}
           </div>
-          {mcpServers.length === 0 ? (
-            <p className="text-muted-foreground text-sm">
-              未配置外部 MCP server。添加后,对话中可勾选启用,也可在消息中用 @名称 指定。
-            </p>
-          ) : (
-            <div className="grid gap-2">
-              {mcpServers.map((s) => {
-                const own = s.source !== "global" && s.source !== "role";
-                return (
+        </div>
+        {mcpServers.length === 0 ? (
+          <p className="text-muted-foreground text-sm">
+            未配置外部 MCP server。挂载后会自动提供给角色；未挂载时可在消息中用 @名称 单次调用。
+          </p>
+        ) : (
+          <div className="grid gap-2">
+            {mcpServers.map((s) => {
+              const own = s.source !== "global" && s.source !== "role";
+              return (
                 <div
                   key={s.serverId}
                   className="border-border/40 flex min-w-0 items-start justify-between gap-3 rounded-md border px-3 py-2.5"
@@ -1227,8 +1224,32 @@ export const RoleDetail: FC<RoleDetailProps> = ({
                           {t("refBadge")}
                         </span>
                       )}
+                      {!readonly && (
+                        <label
+                          className="ml-1 flex cursor-pointer items-center gap-1 text-xs"
+                          title="挂载后每轮对话自动加载；未挂载时仍可通过 @名称 单次调用"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={s.mounted}
+                            onChange={() => void handleMcpToggleMounted(s)}
+                            className="size-3"
+                          />
+                          自动挂载
+                        </label>
+                      )}
+                      {s.mountOverride && s.source !== "own" && (
+                        <button
+                          type="button"
+                          onClick={() => void handleMcpInheritMounted(s)}
+                          className="bg-primary/8 text-primary hover:bg-primary/15 rounded px-1.5 py-0.5 text-[10px] transition-colors"
+                          title="清除角色覆盖，恢复跟随来源 MCP 的默认挂载配置"
+                        >
+                          角色覆盖 · 恢复继承
+                        </button>
+                      )}
                       {own && !readonly && (
-                        <label className="ml-1 flex cursor-pointer items-center gap-1 text-xs">
+                        <label className="flex cursor-pointer items-center gap-1 text-xs">
                           <input
                             type="checkbox"
                             checked={s.enabled}
@@ -1243,10 +1264,8 @@ export const RoleDetail: FC<RoleDetailProps> = ({
                       {s.type === "stdio"
                         ? [s.command, ...(s.args ?? [])].filter(Boolean).join(" ")
                         : s.url}
-                      {s.headerKeys.length > 0 &&
-                        ` · headers: ${s.headerKeys.join(", ")}`}
-                      {(s.envKeys ?? []).length > 0 &&
-                        ` · env: ${s.envKeys!.join(", ")}`}
+                      {s.headerKeys.length > 0 && ` · headers: ${s.headerKeys.join(", ")}`}
+                      {(s.envKeys ?? []).length > 0 && ` · env: ${s.envKeys!.join(", ")}`}
                     </p>
                   </div>
                   {own && !readonly && (
@@ -1268,11 +1287,11 @@ export const RoleDetail: FC<RoleDetailProps> = ({
                     </div>
                   )}
                 </div>
-                );
-              })}
-            </div>
-          )}
-        </section>
+              );
+            })}
+          </div>
+        )}
+      </section>
 
       {/* 从库中选择(引用挂载)弹窗:保存后静默刷新详情/列表 */}
       {!readonly && (
@@ -1282,9 +1301,7 @@ export const RoleDetail: FC<RoleDetailProps> = ({
             roleId={roleId}
             open={skillPickerOpen}
             onOpenChange={setSkillPickerOpen}
-            selected={
-              detail?.skills.filter((s) => s.ref).map((s) => s.ref ?? "") ?? []
-            }
+            selected={detail?.skills.filter((s) => s.ref).map((s) => s.ref ?? "") ?? []}
             onSaved={() => void loadDetail({ silent: true })}
           />
           <LibraryPicker
@@ -1292,9 +1309,7 @@ export const RoleDetail: FC<RoleDetailProps> = ({
             roleId={roleId}
             open={mcpPickerOpen}
             onOpenChange={setMcpPickerOpen}
-            selected={
-              mcpServers.filter((m) => m.ref).map((m) => m.ref ?? "") ?? []
-            }
+            selected={mcpServers.filter((m) => m.ref).map((m) => m.ref ?? "") ?? []}
             onSaved={() => {
               void loadDetail({ silent: true });
               void loadMcpServers();
@@ -1324,9 +1339,7 @@ export const RoleDetail: FC<RoleDetailProps> = ({
                 <button
                   key={value}
                   type="button"
-                  onClick={() =>
-                    setMcpForm((f) => ({ ...f, type: value }))
-                  }
+                  onClick={() => setMcpForm((f) => ({ ...f, type: value }))}
                   className={cn(
                     "rounded px-2.5 py-1 transition-colors",
                     mcpForm.type === value
@@ -1343,9 +1356,7 @@ export const RoleDetail: FC<RoleDetailProps> = ({
               <input
                 value={mcpForm.name}
                 autoComplete="off"
-                onChange={(e) =>
-                  setMcpForm((f) => ({ ...f, name: e.target.value }))
-                }
+                onChange={(e) => setMcpForm((f) => ({ ...f, name: e.target.value }))}
                 placeholder="如 weather(对话中可用 @weather 指定)"
                 className="bg-background border-input h-9 rounded-md border px-2.5 text-sm outline-none"
               />
@@ -1357,9 +1368,7 @@ export const RoleDetail: FC<RoleDetailProps> = ({
                   <input
                     value={mcpForm.url}
                     autoComplete="url"
-                    onChange={(e) =>
-                      setMcpForm((f) => ({ ...f, url: e.target.value }))
-                    }
+                    onChange={(e) => setMcpForm((f) => ({ ...f, url: e.target.value }))}
                     placeholder="https://example.com/mcp"
                     className="bg-background border-input h-9 rounded-md border px-2.5 text-sm outline-none"
                   />
@@ -1371,9 +1380,7 @@ export const RoleDetail: FC<RoleDetailProps> = ({
                   <textarea
                     value={mcpForm.headers}
                     autoComplete="off"
-                    onChange={(e) =>
-                      setMcpForm((f) => ({ ...f, headers: e.target.value }))
-                    }
+                    onChange={(e) => setMcpForm((f) => ({ ...f, headers: e.target.value }))}
                     placeholder={"Authorization: Bearer xxx"}
                     className="bg-background border-input min-h-16 rounded-md border px-2.5 py-2 font-mono text-xs outline-none"
                     rows={3}
@@ -1387,23 +1394,17 @@ export const RoleDetail: FC<RoleDetailProps> = ({
                   <input
                     value={mcpForm.command}
                     autoComplete="off"
-                    onChange={(e) =>
-                      setMcpForm((f) => ({ ...f, command: e.target.value }))
-                    }
+                    onChange={(e) => setMcpForm((f) => ({ ...f, command: e.target.value }))}
                     placeholder="如 npx / node / uvx"
                     className="bg-background border-input h-9 rounded-md border px-2.5 font-mono text-sm outline-none"
                   />
                 </label>
                 <label className="grid gap-1.5">
-                  <span className="text-xs text-muted-foreground">
-                    参数(每行一个)
-                  </span>
+                  <span className="text-xs text-muted-foreground">参数(每行一个)</span>
                   <textarea
                     value={mcpForm.args}
                     autoComplete="off"
-                    onChange={(e) =>
-                      setMcpForm((f) => ({ ...f, args: e.target.value }))
-                    }
+                    onChange={(e) => setMcpForm((f) => ({ ...f, args: e.target.value }))}
                     placeholder={"-y\n@modelcontextprotocol/server-memory"}
                     className="bg-background border-input min-h-16 rounded-md border px-2.5 py-2 font-mono text-xs outline-none"
                     rows={3}
@@ -1416,9 +1417,7 @@ export const RoleDetail: FC<RoleDetailProps> = ({
                   <textarea
                     value={mcpForm.env}
                     autoComplete="off"
-                    onChange={(e) =>
-                      setMcpForm((f) => ({ ...f, env: e.target.value }))
-                    }
+                    onChange={(e) => setMcpForm((f) => ({ ...f, env: e.target.value }))}
                     placeholder={"API_KEY: xxx"}
                     className="bg-background border-input min-h-16 rounded-md border px-2.5 py-2 font-mono text-xs outline-none"
                     rows={3}
@@ -1440,10 +1439,7 @@ export const RoleDetail: FC<RoleDetailProps> = ({
               size="sm"
               className="gap-1.5"
               onClick={() => void handleMcpTest()}
-              disabled={
-                mcpTesting ||
-                (mcpForm.type === "http" ? !mcpForm.url : !mcpForm.command)
-              }
+              disabled={mcpTesting || (mcpForm.type === "http" ? !mcpForm.url : !mcpForm.command)}
             >
               {mcpTesting && <Loader2Icon className="size-3.5 animate-spin" />}
               测试连接
@@ -1464,23 +1460,20 @@ export const RoleDetail: FC<RoleDetailProps> = ({
         onOpenChange={setMcpImportOpen}
         save={async (entry) => {
           const userId = getClientRuntimeContext().userId;
-          const res = await fetch(
-            `/api/settings/roles/${encodeURIComponent(roleId)}/mcp`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                userId,
-                name: entry.name,
-                type: entry.command ? "stdio" : "http",
-                url: entry.url,
-                headers: entry.headers,
-                command: entry.command,
-                args: entry.args,
-                env: entry.env,
-              }),
-            },
-          );
+          const res = await fetch(`/api/settings/roles/${encodeURIComponent(roleId)}/mcp`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              userId,
+              name: entry.name,
+              type: entry.command ? "stdio" : "http",
+              url: entry.url,
+              headers: entry.headers,
+              command: entry.command,
+              args: entry.args,
+              env: entry.env,
+            }),
+          });
           if (!res.ok) {
             const err = (await res.json()) as { error?: string };
             throw new Error(err.error || t("saveFailed"));
@@ -1490,10 +1483,7 @@ export const RoleDetail: FC<RoleDetailProps> = ({
       />
 
       {/* overwrite confirm dialog */}
-      <Dialog
-        open={!!overwriteTarget}
-        onOpenChange={() => setOverwriteTarget(null)}
-      >
+      <Dialog open={!!overwriteTarget} onOpenChange={() => setOverwriteTarget(null)}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle>{t("overwriteTitle")}</DialogTitle>
@@ -1525,16 +1515,10 @@ export const RoleDetail: FC<RoleDetailProps> = ({
         >
           <DialogHeader>
             <DialogTitle>{t("delete")}</DialogTitle>
-            <DialogDescription>
-              {t("deleteConfirm", { name: role.displayName })}
-            </DialogDescription>
+            <DialogDescription>{t("deleteConfirm", { name: role.displayName })}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setDeleteOpen(false)}
-              disabled={deleteBusy}
-            >
+            <Button variant="outline" onClick={() => setDeleteOpen(false)} disabled={deleteBusy}>
               {tc("cancel")}
             </Button>
             <Button
@@ -1551,10 +1535,7 @@ export const RoleDetail: FC<RoleDetailProps> = ({
       </Dialog>
 
       {/* publish skill → global overwrite confirm dialog */}
-      <Dialog
-        open={!!publishTarget}
-        onOpenChange={() => setPublishTarget(null)}
-      >
+      <Dialog open={!!publishTarget} onOpenChange={() => setPublishTarget(null)}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle>{t("publishExistsTitle")}</DialogTitle>
@@ -1582,10 +1563,7 @@ export const RoleDetail: FC<RoleDetailProps> = ({
       </Dialog>
 
       {/* delete skill dialog */}
-      <Dialog
-        open={!!deleteSkillTarget}
-        onOpenChange={() => setDeleteSkillTarget(null)}
-      >
+      <Dialog open={!!deleteSkillTarget} onOpenChange={() => setDeleteSkillTarget(null)}>
         <DialogContent
           className="sm:max-w-sm"
           onKeyDown={(e) => {
@@ -1598,9 +1576,7 @@ export const RoleDetail: FC<RoleDetailProps> = ({
           <DialogHeader>
             <DialogTitle>{t("delete")}</DialogTitle>
             <DialogDescription>
-              {deleteSkillTarget
-                ? t("deleteSkillConfirm", { name: deleteSkillTarget.title })
-                : ""}
+              {deleteSkillTarget ? t("deleteSkillConfirm", { name: deleteSkillTarget.title }) : ""}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -1613,9 +1589,7 @@ export const RoleDetail: FC<RoleDetailProps> = ({
             </Button>
             <Button
               variant="destructive"
-              onClick={() =>
-                deleteSkillTarget && void handleSkillDelete(deleteSkillTarget.skillId)
-              }
+              onClick={() => deleteSkillTarget && void handleSkillDelete(deleteSkillTarget.skillId)}
               disabled={deleteBusy}
               className="gap-1.5"
             >
@@ -1627,10 +1601,7 @@ export const RoleDetail: FC<RoleDetailProps> = ({
       </Dialog>
 
       {/* delete resource dialog */}
-      <Dialog
-        open={!!deleteResourceTarget}
-        onOpenChange={() => setDeleteResourceTarget(null)}
-      >
+      <Dialog open={!!deleteResourceTarget} onOpenChange={() => setDeleteResourceTarget(null)}>
         <DialogContent
           className="sm:max-w-sm"
           onKeyDown={(e) => {
@@ -1661,8 +1632,7 @@ export const RoleDetail: FC<RoleDetailProps> = ({
             <Button
               variant="destructive"
               onClick={() =>
-                deleteResourceTarget &&
-                void handleResourceDelete(deleteResourceTarget.resourceId)
+                deleteResourceTarget && void handleResourceDelete(deleteResourceTarget.resourceId)
               }
               disabled={deleteBusy}
               className="gap-1.5"
@@ -1675,7 +1645,7 @@ export const RoleDetail: FC<RoleDetailProps> = ({
       </Dialog>
     </div>
   );
-}
+};
 
 /* ---------- sub-components ---------- */
 
@@ -1697,14 +1667,7 @@ const SaveIndicator: FC<{
       {status === "saving" && <Loader2Icon className="size-3 animate-spin" />}
       {status === "saved" && <CheckIcon className="size-3" />}
       {status === "error" && <AlertCircleIcon className="size-3" />}
-      {t(
-        status === "saving"
-          ? "autoSaving"
-          : status === "saved"
-            ? "autoSaved"
-            : "autoSaveFailed",
-      )}
+      {t(status === "saving" ? "autoSaving" : status === "saved" ? "autoSaved" : "autoSaveFailed")}
     </span>
   );
 };
-

@@ -7,7 +7,7 @@
  * DELETE /api/admin/mcp?serverId=xxx — 删除
  *
  * 全局 MCP 存 scope=global 行(userId=__system__/roleId=__global__);
- * 内置角色自动生效,自定义角色经引用挂载使用。
+ * 全局 mounted 是默认挂载值；角色引用后可以保存自己的覆盖值。
  */
 import { NextResponse } from "next/server";
 import { requireAdminUser } from "@/lib/admin";
@@ -35,8 +35,7 @@ export async function GET(req: Request) {
       })),
     });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to list global MCP.";
+    const message = error instanceof Error ? error.message : "Failed to list global MCP.";
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
@@ -55,8 +54,7 @@ export async function POST(req: Request) {
       },
     });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to save MCP server.";
+    const message = error instanceof Error ? error.message : "Failed to save MCP server.";
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }
@@ -76,8 +74,7 @@ export async function PUT(req: Request) {
     const result = await testMcpServer(body);
     return NextResponse.json(result);
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "MCP connection failed.";
+    const message = error instanceof Error ? error.message : "MCP connection failed.";
     return NextResponse.json({ error: message }, { status: 502 });
   }
 }
@@ -87,15 +84,11 @@ export async function DELETE(req: Request) {
   try {
     const serverId = new URL(req.url).searchParams.get("serverId");
     if (!serverId) {
-      return NextResponse.json(
-        { error: "serverId is required." },
-        { status: 400 },
-      );
+      return NextResponse.json({ error: "serverId is required." }, { status: 400 });
     }
     return NextResponse.json(await deleteGlobalMcpServer(serverId));
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to delete MCP server.";
+    const message = error instanceof Error ? error.message : "Failed to delete MCP server.";
     const status = message === "MCP server not found." ? 404 : 500;
     return NextResponse.json({ error: message }, { status });
   }

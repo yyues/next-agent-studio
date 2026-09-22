@@ -15,6 +15,8 @@ const roleProfileSchema = new Schema(
     skillIds: { type: [String], required: true, default: [] },
     /** 引用的外部 MCP 键(`${srcRoleId}/${serverId}`,`__global__` 表示全局库) */
     mcpRefs: { type: [String], default: [] },
+    /** 引用 MCP 的角色级挂载覆盖；未设置时继承来源 MCP 的 mounted */
+    mcpMountOverrides: { type: Map, of: Boolean, default: {} },
     toolToggles: { type: Map, of: Boolean, default: {} },
     priority: { type: Number, required: true, default: 0 },
     /** 新会话开场建议问题 */
@@ -36,5 +38,4 @@ roleProfileSchema.index({ userId: 1, roleId: 1 }, { unique: true });
 
 export type RoleProfileDoc = InferSchemaType<typeof roleProfileSchema>;
 
-export const RoleProfileModel =
-  models.RoleProfile ?? model("RoleProfile", roleProfileSchema);
+export const RoleProfileModel = models.RoleProfile ?? model("RoleProfile", roleProfileSchema);

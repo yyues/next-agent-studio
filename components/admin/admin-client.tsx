@@ -33,6 +33,7 @@ import {
   uploadFileWithProgress,
 } from "@/components/settings/upload-shared";
 import { McpImportDialog } from "@/components/settings/mcp-import-dialog";
+import { McpStudio } from "@/components/settings/mcp-studio";
 
 /**
  * 全局资源库维护页(/admin,仅管理员可达):
@@ -58,11 +59,14 @@ type McpRow = {
   command?: string;
   args?: string[];
   enabled: boolean;
+  mounted: boolean;
   headerKeys: string[];
   envKeys?: string[];
 };
 
-export const AdminClient: FC = () => {
+export const AdminClient: FC<{ initialTab?: "resources" | "mcp" }> = ({
+  initialTab = "resources",
+}) => {
   const t = useTranslations("admin");
   const tc = useTranslations("common");
   const tr = useTranslations("roles");
@@ -118,10 +122,9 @@ export const AdminClient: FC = () => {
     if (!deleteSkillTarget || busy) return;
     setBusy(true);
     try {
-      await fetch(
-        `/api/admin/skills?skillId=${encodeURIComponent(deleteSkillTarget.skillId)}`,
-        { method: "DELETE" },
-      );
+      await fetch(`/api/admin/skills?skillId=${encodeURIComponent(deleteSkillTarget.skillId)}`, {
+        method: "DELETE",
+      });
       setDeleteSkillTarget(null);
       await loadSkills();
     } finally {
@@ -270,6 +273,23 @@ export const AdminClient: FC = () => {
     await loadMcps();
   };
 
+  const handleMcpMountToggle = async (server: McpRow) => {
+    await fetch("/api/admin/mcp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        serverId: server.serverId,
+        name: server.name,
+        type: server.type ?? "http",
+        url: server.url,
+        command: server.command ?? "",
+        args: server.args ?? [],
+        mounted: !server.mounted,
+      }),
+    });
+    await loadMcps();
+  };
+
   const handleMcpDelete = async (server: McpRow) => {
     await fetch(`/api/admin/mcp?serverId=${encodeURIComponent(server.serverId)}`, {
       method: "DELETE",
@@ -286,6 +306,45 @@ export const AdminClient: FC = () => {
     </span>
   );
 
+  if (initialTab === "mcp") {
+    return (
+      <div className="from-primary/5 via-background to-background min-h-dvh bg-gradient-to-b">
+        <header className="bg-background/70 border-border/50 sticky top-0 z-20 border-b backdrop-blur-md">
+          <div className="mx-auto flex h-12 max-w-6xl items-center gap-2 px-4">
+            <button
+              type="button"
+              onClick={() => router.push("/chat")}
+              className="text-muted-foreground hover:text-foreground hover:bg-muted inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-sm transition-colors"
+            >
+              <ArrowLeftIcon className="size-4" />
+              <span className="hidden sm:inline">返回对话</span>
+            </button>
+            <span className="text-muted-foreground ml-auto text-xs font-medium">
+              MCP Studio · 管理员
+            </span>
+          </div>
+        </header>
+        <main className="mx-auto w-full max-w-6xl min-w-0 overflow-hidden px-4 py-8">
+          <div className="mb-7 flex items-end justify-between gap-4">
+            <div>
+              <p className="text-primary text-xs font-semibold tracking-[0.16em] uppercase">
+                Global tool desk
+              </p>
+              <h1 className="mt-2 text-2xl font-semibold tracking-tight">全局 MCP Studio</h1>
+              <p className="text-muted-foreground mt-1.5 text-sm">
+                连接、检查并安全调试全局 MCP 工具。
+              </p>
+            </div>
+            <Button variant="outline" size="sm" onClick={() => router.push("/admin")}>
+              返回资源管理
+            </Button>
+          </div>
+          <McpStudio admin />
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="bg-background min-h-dvh">
       <div className="mx-auto w-full max-w-3xl px-4 py-6 md:py-10">
@@ -298,7 +357,12 @@ export const AdminClient: FC = () => {
             <h1 className="text-xl font-semibold tracking-tight">{t("title")}</h1>
             <p className="text-muted-foreground mt-1 text-sm">{t("description")}</p>
           </div>
-          <Button variant="outline" size="sm" className="gap-1.5" onClick={() => router.push("/chat")}>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            onClick={() => router.push("/chat")}
+          >
             <ArrowLeftIcon className="size-3.5" />
             {t("backToChat")}
           </Button>
@@ -378,6 +442,15 @@ export const AdminClient: FC = () => {
                 variant="outline"
                 size="sm"
                 className="gap-1.5"
+                onClick={() => router.push("/admin?tab=mcp")}
+              >
+                <PlugZapIcon className="size-3.5" />
+                Studio
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
                 onClick={() => setMcpImportOpen(true)}
               >
                 <FileJsonIcon className="size-3.5" />
@@ -429,15 +502,25 @@ export const AdminClient: FC = () => {
                         />
                         {t("enabled")}
                       </label>
+                      <label
+                        className="flex cursor-pointer items-center gap-1 text-xs"
+                        title={t("mountedHint")}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={s.mounted}
+                          onChange={() => void handleMcpMountToggle(s)}
+                          className="size-3"
+                        />
+                        {t("mounted")}
+                      </label>
                     </div>
                     <p className="text-muted-foreground mt-0.5 truncate text-xs">
                       {s.type === "stdio"
                         ? [s.command, ...(s.args ?? [])].filter(Boolean).join(" ")
                         : s.url}
-                      {s.headerKeys.length > 0 &&
-                        ` · headers: ${s.headerKeys.join(", ")}`}
-                      {(s.envKeys ?? []).length > 0 &&
-                        ` · env: ${s.envKeys!.join(", ")}`}
+                      {s.headerKeys.length > 0 && ` · headers: ${s.headerKeys.join(", ")}`}
+                      {(s.envKeys ?? []).length > 0 && ` · env: ${s.envKeys!.join(", ")}`}
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-1">
@@ -568,9 +651,7 @@ export const AdminClient: FC = () => {
               <p
                 className={cn(
                   "text-xs",
-                  mcpTestResult.startsWith("OK")
-                    ? "text-emerald-500"
-                    : "text-destructive",
+                  mcpTestResult.startsWith("OK") ? "text-emerald-500" : "text-destructive",
                 )}
               >
                 {mcpTestResult}
@@ -583,10 +664,7 @@ export const AdminClient: FC = () => {
               size="sm"
               className="gap-1.5"
               onClick={() => void handleMcpTest()}
-              disabled={
-                mcpTesting ||
-                (mcpForm.type === "http" ? !mcpForm.url : !mcpForm.command)
-              }
+              disabled={mcpTesting || (mcpForm.type === "http" ? !mcpForm.url : !mcpForm.command)}
             >
               {mcpTesting && <Loader2Icon className="size-3.5 animate-spin" />}
               {t("testConnection")}
@@ -655,10 +733,7 @@ export const AdminClient: FC = () => {
       </Dialog>
 
       {/* 删除 skill 确认 */}
-      <Dialog
-        open={!!deleteSkillTarget}
-        onOpenChange={() => setDeleteSkillTarget(null)}
-      >
+      <Dialog open={!!deleteSkillTarget} onOpenChange={() => setDeleteSkillTarget(null)}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle>{tc("delete")}</DialogTitle>
@@ -667,11 +742,7 @@ export const AdminClient: FC = () => {
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setDeleteSkillTarget(null)}
-              disabled={busy}
-            >
+            <Button variant="outline" onClick={() => setDeleteSkillTarget(null)} disabled={busy}>
               {tc("cancel")}
             </Button>
             <Button

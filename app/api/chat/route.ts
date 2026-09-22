@@ -13,23 +13,12 @@ import { mongoResumableStore, resumableContext } from "@/lib/resumable/context";
 import { z } from "zod";
 import { marked } from "marked";
 import htmlToDocx from "html-to-docx";
-import {
-  filterToolsByRole,
-  resolveRuntimeConfig,
-} from "@/lib/server-settings";
+import { filterToolsByRole, resolveRuntimeConfig } from "@/lib/server-settings";
 import { getAuthUserId } from "@/lib/auth-request";
 import { extractCommandTokens } from "@/lib/slash-directive";
 import { resolveReasoningOptions } from "@/lib/reasoning";
-import {
-  countRoleChunks,
-  searchRoleKnowledge,
-  formatSearchResults,
-} from "@/lib/rag";
-import {
-  loadMcpToolsForChat,
-  extractMcpMentions,
-  type McpToolBundle,
-} from "@/lib/mcp/client";
+import { countRoleChunks, searchRoleKnowledge, formatSearchResults } from "@/lib/rag";
+import { loadMcpToolsForChat, extractMcpMentions, type McpToolBundle } from "@/lib/mcp/client";
 
 /**
  * MCP 写操作工具的名称启发式(命中即要求用户审批后执行)。
@@ -68,21 +57,16 @@ export async function POST(req: Request) {
    * - pdf : 无头浏览器打印(尽力而为,无浏览器时报错让模型改荐 docx)
    */
   const sanitizeName = (filename: string, allowed: RegExp) => {
-    const base =
-      filename.replace(/[\\/:*?"<>|\s]+/g, "-").slice(0, 80) || "document";
+    const base = filename.replace(/[\\/:*?"<>|\s]+/g, "-").slice(0, 80) || "document";
     return allowed.test(base) ? base : `${base}.md`;
   };
-  const dataUrl = (mime: string, buf: Buffer) =>
-    `data:${mime};base64,${buf.toString("base64")}`;
+  const dataUrl = (mime: string, buf: Buffer) => `data:${mime};base64,${buf.toString("base64")}`;
   const textUrl = (mime: string, text: string) =>
     `data:${mime};charset=utf-8;base64,${Buffer.from(text, "utf8").toString("base64")}`;
 
-  const DOCX_MIME =
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-  const XLSX_MIME =
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-  const PPTX_MIME =
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+  const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  const PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
 
   /** 定位本机可用的 Chromium/Edge(仅本地/自托管;Vercel 需配 CHROME_PATH) */
   const findBrowser = () => {
@@ -114,10 +98,7 @@ export async function POST(req: Request) {
           message: `不支持的文档格式。本工具仅支持 ${DOC_EXTS};表格请用 generate_spreadsheet(.xlsx),演示文稿请用 generate_presentation(.pptx)。`,
         })
         .describe("文件名,含扩展名(.md/.docx/.txt/.csv/.json/.pdf)"),
-      content: z
-        .string()
-        .min(1)
-        .describe("完整文档内容(纯 Markdown),不得省略或截断"),
+      content: z.string().min(1).describe("完整文档内容(纯 Markdown),不得省略或截断"),
     }),
     execute: async ({ filename, content }) => {
       const base = sanitizeName(filename, /\.(md|markdown|txt|csv|json|docx|pdf)$/i);
@@ -129,7 +110,12 @@ export async function POST(req: Request) {
             `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>${html}</body></html>`,
           ),
         );
-        return { url: dataUrl(DOCX_MIME, buf), filename: base, mimeType: DOCX_MIME, size: buf.length };
+        return {
+          url: dataUrl(DOCX_MIME, buf),
+          filename: base,
+          mimeType: DOCX_MIME,
+          size: buf.length,
+        };
       }
 
       if (/\.pdf$/i.test(base)) {
@@ -152,12 +138,19 @@ export async function POST(req: Request) {
         try {
           const page_ = await browser.newPage();
           await page_.setContent(page, { waitUntil: "load" });
-          const buf = Buffer.from(await page_.pdf({
-            format: "A4",
-            printBackground: true,
-            margin: { top: "1.5cm", bottom: "1.5cm", left: "1.5cm", right: "1.5cm" },
-          }));
-          return { url: dataUrl("application/pdf", buf), filename: base, mimeType: "application/pdf", size: buf.length };
+          const buf = Buffer.from(
+            await page_.pdf({
+              format: "A4",
+              printBackground: true,
+              margin: { top: "1.5cm", bottom: "1.5cm", left: "1.5cm", right: "1.5cm" },
+            }),
+          );
+          return {
+            url: dataUrl("application/pdf", buf),
+            filename: base,
+            mimeType: "application/pdf",
+            size: buf.length,
+          };
         } finally {
           await browser.close();
         }
@@ -217,15 +210,19 @@ export async function POST(req: Request) {
           let maxLen = 8;
           for (const row of s.rows) {
             const v = row[c - 1];
-            if (v !== null && v !== undefined)
-              maxLen = Math.max(maxLen, String(v).length + 2);
+            if (v !== null && v !== undefined) maxLen = Math.max(maxLen, String(v).length + 2);
           }
           ws.getColumn(c).width = Math.min(maxLen, 40);
         }
       }
       const buf = Buffer.from(await wb.xlsx.writeBuffer());
       const name = sanitizeName(filename, /\.xlsx$/i);
-      return { url: dataUrl(XLSX_MIME, buf), filename: name, mimeType: XLSX_MIME, size: buf.length };
+      return {
+        url: dataUrl(XLSX_MIME, buf),
+        filename: name,
+        mimeType: XLSX_MIME,
+        size: buf.length,
+      };
     },
   });
 
@@ -258,13 +255,26 @@ export async function POST(req: Request) {
       for (const s of slides) {
         const slide = pptx.addSlide();
         slide.addText(s.title, {
-          x: 0.5, y: 0.4, w: 9, h: 0.9,
-          fontSize: 30, bold: true, color: "1F2937",
+          x: 0.5,
+          y: 0.4,
+          w: 9,
+          h: 0.9,
+          fontSize: 30,
+          bold: true,
+          color: "1F2937",
         });
         if (s.bullets.length > 0) {
           slide.addText(
             s.bullets.map((b) => ({ text: b, options: { bullet: true, breakLine: true } })),
-            { x: 0.8, y: 1.5, w: 8.4, h: 3.6, fontSize: 16, color: "374151", lineSpacingMultiple: 1.4 },
+            {
+              x: 0.8,
+              y: 1.5,
+              w: 8.4,
+              h: 3.6,
+              fontSize: 16,
+              color: "374151",
+              lineSpacingMultiple: 1.4,
+            },
           );
         }
         if (s.notes) slide.addNotes(s.notes);
@@ -280,7 +290,6 @@ export async function POST(req: Request) {
     },
   });
 
-
   const {
     messages,
     system,
@@ -288,7 +297,6 @@ export async function POST(req: Request) {
     userId,
     roleId,
     deepThinking,
-    mcpServerIds,
   }: {
     messages: UIMessage[];
     system?: string;
@@ -298,14 +306,9 @@ export async function POST(req: Request) {
     deepThinking?: boolean;
     // conversationId 由客户端携带（见 assistant.tsx），服务端预留用于会话维度
     conversationId?: string;
-    /** 对话面板勾选启用的 MCP serverId 列表 */
-    mcpServerIds?: string[];
   } = await req.json();
 
-  const normalizedUserId = await getAuthUserId(
-    req,
-    userId ?? req.headers.get("x-user-id"),
-  );
+  const normalizedUserId = await getAuthUserId(req, userId ?? req.headers.get("x-user-id"));
 
   const lastUserQuery = extractLastUserQuery(messages);
   // "/" 斜杠命令:显式调用技能(仅注入命中技能)与 MCP 服务器(强制连接)
@@ -317,10 +320,7 @@ export async function POST(req: Request) {
     invokedSkillCommands: commandTokens,
   });
 
-  const activeTools = filterToolsByRole(
-    tools ?? {},
-    runtimeConfig.role.toolToggles,
-  );
+  const activeTools = filterToolsByRole(tools ?? {}, runtimeConfig.role.toolToggles);
 
   // 深度思考：按 provider family 解析原生 reasoning 参数（OpenAI/
   // Anthropic/通用各异），对未知 family 追加 prompt 指令兜底。
@@ -335,9 +335,8 @@ export async function POST(req: Request) {
 
   // RAG:角色有知识库切片时挂载 rag_search 工具,由模型按需检索
   // (不再每轮自动检索注入 system prompt)。检索失败降级为不挂载。
-  // MCP:加载角色配置的外部 MCP server 工具。消息中 @serverName 可强制启用;
-  // "/server名称" 斜杠命令与 @ 提及同语义(未知名称不会命中任何 server,自然忽略)。
-  // 未勾选任何 server 且无提及时,使用角色下所有 enabled 的 server。
+  // MCP:自动加载角色显式挂载的 server；消息中 @serverName 可单次启用
+  // 未挂载的 server（未知名称不会命中任何 server，自然忽略）。
   // 单个 server 连接失败自动跳过,不阻断对话。
   let mcpBundle: McpToolBundle = {
     tools: {},
@@ -349,13 +348,7 @@ export async function POST(req: Request) {
     loadMcpToolsForChat({
       userId: normalizedUserId,
       roleId: runtimeConfig.role.roleId,
-      enabledServerIds: Array.isArray(mcpServerIds)
-        ? mcpServerIds
-        : undefined,
-      mentionNames: [
-        ...extractMcpMentions(lastUserQuery),
-        ...commandTokens,
-      ],
+      mentionNames: extractMcpMentions(lastUserQuery),
     }).catch((error) => {
       // 单个 server 连接失败自动跳过,不阻断对话
       console.warn("[chat] MCP tools load failed:", error);
@@ -371,17 +364,8 @@ export async function POST(req: Request) {
     description:
       "检索当前角色知识库(用户上传的 PDF/Markdown/TXT 资料切片)。当用户问题可能涉及已上传的资料、需要引用资料原文或出处时调用;一次结果不理想可换关键词再次调用。返回带来源文件与页码的切片列表,引用时请注明出处。多个来源对同一问题给出不一致信息时,不要悄悄混合:并列说明各来源的说法(含来源与页码)并指出差异;带[权威资料]标注的来源为该角色指定的权威版本,优先采信。",
     inputSchema: z.object({
-      query: z
-        .string()
-        .min(1)
-        .describe("检索关键词或问题,优先使用资料中可能出现的原词表述"),
-      topK: z
-        .number()
-        .int()
-        .min(1)
-        .max(8)
-        .optional()
-        .describe("返回条数,默认 5"),
+      query: z.string().min(1).describe("检索关键词或问题,优先使用资料中可能出现的原词表述"),
+      topK: z.number().int().min(1).max(8).optional().describe("返回条数,默认 5"),
     }),
     execute: async ({ query, topK }) => {
       const hits = await searchRoleKnowledge(
@@ -399,8 +383,7 @@ export async function POST(req: Request) {
       ? [
           "你可以调用以下外部 MCP 工具(工具名以 mcp__ 开头):",
           ...mcpBundle.serverSummaries.map(
-            (s) =>
-              `- ${s.name} (serverId: ${s.serverId}): ${s.toolNames.join(", ") || "无工具"}`,
+            (s) => `- ${s.name} (serverId: ${s.serverId}): ${s.toolNames.join(", ") || "无工具"}`,
           ),
           "用户在消息中用 @server名称 指定某个 MCP 时,优先使用该 server 的工具。",
         ].join("\n")
@@ -464,8 +447,7 @@ export async function POST(req: Request) {
   // backup 分支由后台 producer 落库,仅供断线/刷新后 resume 重放。
   const streamId = crypto.randomUUID();
   const source = result.toUIMessageStreamResponse({
-    onError: (error) =>
-      error instanceof Error ? error.message : String(error),
+    onError: (error) => (error instanceof Error ? error.message : String(error)),
   });
   const [liveBody, backupBody] = source.body!.tee();
   void resumableContext

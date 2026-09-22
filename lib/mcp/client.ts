@@ -4,23 +4,61 @@ import { createMCPClient, type MCPClient } from "@ai-sdk/mcp";
 import { Experimental_StdioMCPTransport } from "@ai-sdk/mcp/mcp-stdio";
 import type { ToolSet } from "ai";
 import { connectToMongo } from "@/lib/mongodb";
-import {
-  McpServerModel,
-  toMcpServerConfig,
-  type McpServerConfig,
-} from "@/lib/models/mcp-server";
+import { McpServerModel, toMcpServerConfig, type McpServerConfig } from "@/lib/models/mcp-server";
 import { RoleProfileModel } from "@/lib/models/role-profile";
 import { encryptSecretMap } from "@/lib/secret-crypto";
 import { GLOBAL_ROLE_ID, GLOBAL_USER_ID, BUILTIN_USER_ID } from "@/lib/scopes";
-import { isBuiltinRole, personalRoleClause } from "@/lib/server-settings";
+import {
+  assertRoleAccess,
+  isBuiltinRole,
+  personalRoleClause,
+  visibleRoleFilter,
+} from "@/lib/server-settings";
 import { findMcpRowsByRefs } from "@/lib/resource-refs";
 import { cachedLoad, invalidateCache } from "@/lib/config-cache";
+import { McpInvocationLogModel } from "@/lib/models/mcp-invocation-log";
 
 const CONNECT_TIMEOUT_MS = 8000;
 // stdio 型首连较慢(npx 首次运行需下载依赖),放宽超时
 const STDIO_CONNECT_TIMEOUT_MS = 60000;
 /** 单次 MCP 工具调用超时:超时后向模型返回错误,对话继续而不是卡死 */
 const TOOL_CALL_TIMEOUT_MS = 30000;
+
+const MCP_WRITE_TOOL_RE =
+  /(create|write|update|delete|remove|drop|insert|send|post|patch|rename|move|copy|edit|modify|cancel|submit|publish|deploy|reset|set|add|upload|execute|run|apply|approve|pay|transfer|close|open|start|stop|kill|restart)/i;
+
+export type McpToolRisk = "read" | "write" | "unknown";
+
+export type McpToolDescriptor = {
+  name: string;
+  description?: string;
+  inputSchema: Record<string, unknown>;
+  risk: McpToolRisk;
+};
+
+export type McpInspection = {
+  server: McpServerConfig;
+  serverInfo?: { name?: string; version?: string };
+  tools: McpToolDescriptor[];
+  connectedAt: string;
+};
+
+export type McpInvocationInput = {
+  userId: string;
+  roleId: string;
+  serverId: string;
+  toolName: string;
+  arguments: Record<string, unknown>;
+  confirmed: boolean;
+};
+
+export type McpInvocationResult = {
+  invocationId: string;
+  status: "success" | "error" | "timeout" | "denied";
+  result?: unknown;
+  error?: string;
+  durationMs: number;
+};
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
@@ -31,6 +69,70 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   ]);
 }
 
+function toolRisk(name: string): McpToolRisk {
+  if (MCP_WRITE_TOOL_RE.test(name)) return "write";
+  if (
+    /(get|list|search|read|fetch|find|query|describe|inspect|status|health|check|lookup)/i.test(
+      name,
+    )
+  ) {
+    return "read";
+  }
+  return "unknown";
+}
+
+function normalizeInputSchema(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object") {
+    const candidate = value as Record<string, unknown>;
+    if (candidate._schema && typeof candidate._schema === "object") {
+      return candidate._schema as Record<string, unknown>;
+    }
+    if (candidate.jsonSchema && typeof candidate.jsonSchema === "object") {
+      return candidate.jsonSchema as Record<string, unknown>;
+    }
+    return candidate;
+  }
+  return { type: "object", properties: {} };
+}
+
+function validateJsonSchema(
+  schema: Record<string, unknown>,
+  value: unknown,
+  path = "arguments",
+): string | null {
+  const type = typeof schema.type === "string" ? schema.type : undefined;
+  if (type === "object") {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return `${path} must be an object`;
+    }
+    const objectValue = value as Record<string, unknown>;
+    const required = Array.isArray(schema.required) ? schema.required : [];
+    for (const key of required) {
+      if (typeof key === "string" && objectValue[key] === undefined) {
+        return `${path}.${key} is required`;
+      }
+    }
+    const properties = schema.properties;
+    if (properties && typeof properties === "object") {
+      for (const [key, childSchema] of Object.entries(properties as Record<string, unknown>)) {
+        if (objectValue[key] !== undefined && childSchema && typeof childSchema === "object") {
+          const error = validateJsonSchema(
+            childSchema as Record<string, unknown>,
+            objectValue[key],
+            `${path}.${key}`,
+          );
+          if (error) return error;
+        }
+      }
+    }
+  } else if (type === "string" && typeof value !== "string") return `${path} must be a string`;
+  else if (type === "number" && typeof value !== "number") return `${path} must be a number`;
+  else if (type === "integer" && !Number.isInteger(value)) return `${path} must be an integer`;
+  else if (type === "boolean" && typeof value !== "boolean") return `${path} must be a boolean`;
+  else if (type === "array" && !Array.isArray(value)) return `${path} must be an array`;
+  return null;
+}
+
 /**
  * 修复非规范 MCP 网关的兼容问题:
  * 部分网关(如阿里云市场 mcpnacos)在 tools/list 无更多页时返回 nextCursor:""
@@ -38,10 +140,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
  * 表现为 tools() 永远不 resolve、聊天卡死。这里拦截 JSON 响应剥掉空 nextCursor;
  * SSE 流响应原样透传。
  */
-async function sanitizeMcpFetch(
-  input: RequestInfo | URL,
-  init?: RequestInit,
-): Promise<Response> {
+async function sanitizeMcpFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const res = await fetch(input, init);
   const isToolsList =
     (init?.method ?? "GET").toUpperCase() === "POST" &&
@@ -83,6 +182,7 @@ export type McpUpsertPayload = McpConnectTarget & {
   name: string;
   headers?: Record<string, string>;
   enabled?: boolean;
+  mounted?: boolean;
 };
 
 export type McpServerSummary = {
@@ -101,18 +201,35 @@ export type McpToolBundle = {
   close: () => Promise<void>;
 };
 
-/** 带 source/ref 标注的有效 MCP(供列表/勾选 UI 区分来源) */
+/** 带 source/ref 与最终挂载状态的角色有效 MCP */
 export type EffectiveMcpServer = McpServerConfig & {
   /** own=本角色私有;global=全局库;role=自己其他角色引用 */
   source: "own" | "global" | "role";
   /** 引用键(`${srcRoleId}/${serverId}`);own 为 null */
   ref: string | null;
+  /** 来源 MCP 自身的挂载默认值 */
+  inheritedMounted: boolean;
+  /** 当前角色是否显式覆盖了来源 MCP 的挂载值 */
+  mountOverride: boolean;
 };
 
-export async function listMcpServers(
-  userId: string,
-  roleId: string,
-): Promise<McpServerConfig[]> {
+function toBooleanMap(value: unknown): Record<string, boolean> {
+  if (value instanceof Map) {
+    return Object.fromEntries(
+      [...value.entries()].filter(
+        (entry): entry is [string, boolean] => typeof entry[1] === "boolean",
+      ),
+    );
+  }
+  if (!value || typeof value !== "object") return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).filter(
+      (entry): entry is [string, boolean] => typeof entry[1] === "boolean",
+    ),
+  );
+}
+
+export async function listMcpServers(userId: string, roleId: string): Promise<McpServerConfig[]> {
   await connectToMongo();
   const docs = await McpServerModel.find({ userId, roleId }).lean();
   return docs
@@ -144,17 +261,12 @@ async function loadEffectiveMcpServersFromDb(
 
   const roleDoc = await RoleProfileModel.findOne({
     roleId,
-    $or: [
-      personalRoleClause(userId),
-      { userId: BUILTIN_USER_ID },
-      { visibility: "public" },
-    ],
+    $or: [personalRoleClause(userId), { userId: BUILTIN_USER_ID }, { visibility: "public" }],
   })
-    .select("mcpRefs")
+    .select("mcpRefs mcpMountOverrides")
     .lean();
-  const refs = Array.isArray(roleDoc?.mcpRefs)
-    ? roleDoc.mcpRefs.map(String)
-    : [];
+  const refs = Array.isArray(roleDoc?.mcpRefs) ? roleDoc.mcpRefs.map(String) : [];
+  const mountOverrides = toBooleanMap(roleDoc?.mcpMountOverrides);
 
   const [ownDocs, refRows, globalRows] = await Promise.all([
     McpServerModel.find({ userId, roleId, scope: "role" })
@@ -176,9 +288,7 @@ async function loadEffectiveMcpServersFromDb(
     ...ownDocs.map((d) => ({ doc: d, source: "own" as const, ref: null })),
     ...refRows.map((d) => ({
       doc: d,
-      source: (d.scope === "global" ? "global" : "role") as
-        | "global"
-        | "role",
+      source: (d.scope === "global" ? "global" : "role") as "global" | "role",
       ref: `${String(d.roleId)}/${String(d.serverId)}`,
     })),
     ...globalRows.map((d) => ({
@@ -190,7 +300,15 @@ async function loadEffectiveMcpServersFromDb(
     const config = toMcpServerConfig(doc.doc as Record<string, unknown>);
     if (seen.has(config.serverId)) continue;
     seen.add(config.serverId);
-    merged.push({ ...config, source: doc.source, ref: doc.ref });
+    const override = doc.ref ? mountOverrides[doc.ref] : undefined;
+    merged.push({
+      ...config,
+      mounted: override ?? config.mounted,
+      source: doc.source,
+      ref: doc.ref,
+      inheritedMounted: config.mounted,
+      mountOverride: override !== undefined,
+    });
   }
   return merged.sort((a, b) => a.serverId.localeCompare(b.serverId));
 }
@@ -210,8 +328,7 @@ function stripWrappingQuotes(s: string): string {
   const t = s.trim();
   if (
     t.length >= 2 &&
-    ((t.startsWith('"') && t.endsWith('"')) ||
-      (t.startsWith("'") && t.endsWith("'")))
+    ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'")))
   )
     return t.slice(1, -1).trim();
   return t;
@@ -259,9 +376,7 @@ function normalizeMcpUpsert(payload: McpUpsertPayload) {
       : "http";
   const url = (payload.url ?? "").trim();
   const command = (payload.command ?? "").trim();
-  const args = (payload.args ?? [])
-    .map((a) => String(a).trim())
-    .filter((a) => a.length > 0);
+  const args = (payload.args ?? []).map((a) => String(a).trim()).filter((a) => a.length > 0);
 
   if (type === "http" && !/^https?:\/\//i.test(url)) {
     throw new Error("url must be a valid http(s) URL.");
@@ -292,9 +407,7 @@ function normalizeMcpUpsert(payload: McpUpsertPayload) {
   };
 }
 
-export async function upsertGlobalMcpServer(
-  payload: McpUpsertPayload,
-): Promise<McpServerConfig> {
+export async function upsertGlobalMcpServer(payload: McpUpsertPayload): Promise<McpServerConfig> {
   await connectToMongo();
 
   const serverId =
@@ -312,13 +425,10 @@ export async function upsertGlobalMcpServer(
     scope: "global",
     serverId,
   }).lean();
-  const prev = existing
-    ? toMcpServerConfig(existing as Record<string, unknown>)
-    : null;
+  const prev = existing ? toMcpServerConfig(existing as Record<string, unknown>) : null;
 
   // headers/env 未提供时保留库中已有值(如 enabled 切换只传部分字段)
-  const headers =
-    payload.headers !== undefined ? normalized.headers : (prev?.headers ?? {});
+  const headers = payload.headers !== undefined ? normalized.headers : (prev?.headers ?? {});
   const env = payload.env !== undefined ? normalized.env : (prev?.env ?? {});
 
   const doc = await McpServerModel.findOneAndUpdate(
@@ -335,6 +445,7 @@ export async function upsertGlobalMcpServer(
       args: normalized.type === "stdio" ? normalized.args : [],
       env: encryptSecretMap(env),
       enabled: payload.enabled ?? true,
+      mounted: payload.mounted ?? prev?.mounted ?? true,
       scope: "global",
     },
     { returnDocument: "after", upsert: true, setDefaultsOnInsert: true },
@@ -380,13 +491,10 @@ export async function upsertMcpServer(
     roleId,
     serverId,
   }).lean();
-  const prev = existing
-    ? toMcpServerConfig(existing as Record<string, unknown>)
-    : null;
+  const prev = existing ? toMcpServerConfig(existing as Record<string, unknown>) : null;
 
   // headers/env 未提供时保留库中已有值(如 enabled 切换只传部分字段)
-  const headers =
-    payload.headers !== undefined ? normalized.headers : (prev?.headers ?? {});
+  const headers = payload.headers !== undefined ? normalized.headers : (prev?.headers ?? {});
   const env = payload.env !== undefined ? normalized.env : (prev?.env ?? {});
 
   const doc = await McpServerModel.findOneAndUpdate(
@@ -403,6 +511,7 @@ export async function upsertMcpServer(
       args: normalized.type === "stdio" ? normalized.args : [],
       env: encryptSecretMap(env),
       enabled: payload.enabled ?? true,
+      mounted: payload.mounted ?? prev?.mounted ?? true,
     },
     { returnDocument: "after", upsert: true, setDefaultsOnInsert: true },
   ).lean();
@@ -412,16 +521,78 @@ export async function upsertMcpServer(
   return toMcpServerConfig(doc as Record<string, unknown>);
 }
 
-export async function deleteMcpServer(
-  userId: string,
-  roleId: string,
-  serverId: string,
-) {
+export async function deleteMcpServer(userId: string, roleId: string, serverId: string) {
   await connectToMongo();
   const result = await McpServerModel.deleteOne({ userId, roleId, serverId });
   if (result.deletedCount === 0) throw new Error("MCP server not found.");
   invalidateCache("mcp", `${userId}/${roleId}`);
   return { deleted: true };
+}
+
+/**
+ * 设置角色视角下的 MCP 自动挂载状态。
+ * - 自有 MCP 直接更新服务器默认值。
+ * - 引用 MCP 写入角色覆盖，不修改来源角色或全局 MCP。
+ */
+export async function setRoleMcpMounted(input: {
+  userId: string;
+  roleId: string;
+  serverId: string;
+  ref?: string | null;
+  mounted?: boolean;
+  inherit?: boolean;
+}): Promise<EffectiveMcpServer> {
+  await assertRoleAccess(input.userId, input.roleId);
+  const target = (await listEffectiveMcpServers(input.userId, input.roleId)).find(
+    (server) =>
+      server.serverId === input.serverId && (input.ref === undefined || server.ref === input.ref),
+  );
+  if (!target) throw new Error("MCP server not found for this role.");
+
+  if (target.source === "own") {
+    if (typeof input.mounted !== "boolean") {
+      throw new Error("mounted must be a boolean for an owned MCP server.");
+    }
+    const result = await McpServerModel.updateOne(
+      {
+        userId: input.userId,
+        roleId: input.roleId,
+        serverId: input.serverId,
+        scope: "role",
+      },
+      { $set: { mounted: input.mounted } },
+    );
+    if (result.matchedCount === 0) {
+      throw new Error("MCP server not found for this role.");
+    }
+  } else {
+    if (!target.ref) throw new Error("MCP reference is required.");
+    const roleDoc = await RoleProfileModel.findOne({
+      roleId: input.roleId,
+      ...visibleRoleFilter(input.userId),
+    }).lean();
+    if (!roleDoc) throw new Error("Role not found.");
+    const overrides = toBooleanMap(roleDoc.mcpMountOverrides);
+    if (input.inherit) {
+      delete overrides[target.ref];
+    } else {
+      if (typeof input.mounted !== "boolean") {
+        throw new Error("mounted must be a boolean.");
+      }
+      overrides[target.ref] = input.mounted;
+    }
+    await RoleProfileModel.updateOne(
+      { _id: roleDoc._id },
+      { $set: { mcpMountOverrides: overrides } },
+    );
+  }
+
+  invalidateCache("mcp");
+  const updated = (await listEffectiveMcpServers(input.userId, input.roleId)).find(
+    (server) => server.serverId === input.serverId && server.ref === target.ref,
+  );
+  if (!updated) throw new Error("MCP server not found for this role.");
+  return updated;
 }
 
 /** 尝试连接并列出工具名,用于配置页连通性测试 */
@@ -444,9 +615,7 @@ export async function testMcpServer(
 }
 
 async function connectSingle(server: McpConnectTarget) {
-  const isStdio =
-    server.type === "stdio" ||
-    (!server.url?.trim() && !!server.command?.trim());
+  const isStdio = server.type === "stdio" || (!server.url?.trim() && !!server.command?.trim());
   const timeoutMs = isStdio ? STDIO_CONNECT_TIMEOUT_MS : CONNECT_TIMEOUT_MS;
 
   const client = await Promise.race([
@@ -457,13 +626,9 @@ async function connectSingle(server: McpConnectTarget) {
           transport: new Experimental_StdioMCPTransport({
             command: server.command?.trim() ?? "",
             args: server.args ?? [],
-            env:
-              server.env && Object.keys(server.env).length > 0
-                ? server.env
-                : undefined,
+            env: server.env && Object.keys(server.env).length > 0 ? server.env : undefined,
           }),
-          onUncaughtError: (error) =>
-            console.warn("[mcp] stdio transport error:", String(error)),
+          onUncaughtError: (error) => console.warn("[mcp] stdio transport error:", String(error)),
         })
       : (() => {
           const url = server.url?.trim() ?? "";
@@ -472,9 +637,7 @@ async function connectSingle(server: McpConnectTarget) {
             transport: {
               type: isSse ? "sse" : "http",
               url,
-              headers: Object.keys(server.headers ?? {}).length
-                ? server.headers
-                : undefined,
+              headers: Object.keys(server.headers ?? {}).length ? server.headers : undefined,
               // 剥掉非规范网关返回的空 nextCursor,避免 tools/list 无限重发
               fetch: sanitizeMcpFetch,
             },
@@ -484,9 +647,7 @@ async function connectSingle(server: McpConnectTarget) {
       setTimeout(
         () =>
           reject(
-            new Error(
-              `MCP connect timeout: ${isStdio ? `${server.command}` : `${server.url}`}`,
-            ),
+            new Error(`MCP connect timeout: ${isStdio ? `${server.command}` : `${server.url}`}`),
           ),
         timeoutMs,
       ),
@@ -513,17 +674,188 @@ async function connectSingle(server: McpConnectTarget) {
   };
 }
 
+function summarizeValue(value: unknown, max = 8000): string {
+  const redact = (input: unknown, key = ""): unknown => {
+    if (/(token|authorization|password|secret|apikey|api_key)/i.test(key)) {
+      return "[REDACTED]";
+    }
+    if (Array.isArray(input)) return input.slice(0, 50).map((item) => redact(item));
+    if (input && typeof input === "object") {
+      return Object.fromEntries(
+        Object.entries(input as Record<string, unknown>)
+          .slice(0, 100)
+          .map(([childKey, childValue]) => [childKey, redact(childValue, childKey)]),
+      );
+    }
+    if (typeof input === "string" && input.length > 2048) return `${input.slice(0, 2048)}…`;
+    return input;
+  };
+  try {
+    const text = JSON.stringify(redact(value));
+    return text.length > max ? `${text.slice(0, max)}…` : text;
+  } catch {
+    return String(value).slice(0, max);
+  }
+}
+
+async function writeInvocationLog(input: {
+  invocationId: string;
+  userId: string;
+  roleId: string;
+  serverId: string;
+  toolName: string;
+  status: "success" | "error" | "timeout" | "denied";
+  durationMs: number;
+  arguments: unknown;
+  result?: unknown;
+  error?: string;
+}) {
+  try {
+    await connectToMongo();
+    await McpInvocationLogModel.create({
+      invocationId: input.invocationId,
+      userId: input.userId,
+      roleId: input.roleId,
+      serverId: input.serverId,
+      toolName: input.toolName,
+      status: input.status,
+      durationMs: input.durationMs,
+      argumentSummary: summarizeValue(input.arguments),
+      resultSummary: input.result === undefined ? "" : summarizeValue(input.result),
+      errorMessage: input.error?.slice(0, 2000) ?? "",
+    });
+  } catch (error) {
+    console.warn("[mcp] invocation log failed:", String(error));
+  }
+}
+
+async function findEffectiveServer(userId: string, roleId: string, serverId: string) {
+  const servers = await listEffectiveMcpServers(userId, roleId);
+  const server = servers.find((item) => item.serverId === serverId);
+  if (!server) throw new Error("MCP server not found for this role.");
+  return server;
+}
+
+function describeTools(tools: Record<string, unknown>): McpToolDescriptor[] {
+  return Object.entries(tools).map(([name, value]) => {
+    const tool = (value ?? {}) as Record<string, unknown>;
+    return {
+      name,
+      description: typeof tool.description === "string" ? tool.description : undefined,
+      inputSchema: normalizeInputSchema(tool.inputSchema),
+      risk: toolRisk(name),
+    };
+  });
+}
+
+export async function inspectMcpServer(input: {
+  userId: string;
+  roleId: string;
+  serverId: string;
+  server?: McpServerConfig;
+}): Promise<McpInspection> {
+  const server =
+    input.server ?? (await findEffectiveServer(input.userId, input.roleId, input.serverId));
+  const connected = await connectSingle(server);
+  try {
+    const info = connected.client.serverInfo as { name?: string; version?: string } | undefined;
+    return {
+      server,
+      serverInfo: info ? { name: info.name, version: info.version } : undefined,
+      tools: describeTools(connected.tools as unknown as Record<string, unknown>),
+      connectedAt: new Date().toISOString(),
+    };
+  } finally {
+    await connected.client.close().catch(() => undefined);
+  }
+}
+
+export async function invokeMcpTool(
+  input: McpInvocationInput & { server?: McpServerConfig },
+): Promise<McpInvocationResult> {
+  const invocationId = crypto.randomUUID();
+  const startedAt = Date.now();
+  let connected: Awaited<ReturnType<typeof connectSingle>> | undefined;
+  try {
+    const server =
+      input.server ?? (await findEffectiveServer(input.userId, input.roleId, input.serverId));
+    connected = await connectSingle(server);
+    const rawTool = (connected.tools as unknown as Record<string, unknown>)[input.toolName] as
+      | { inputSchema?: unknown; execute?: (args: unknown, options?: unknown) => Promise<unknown> }
+      | undefined;
+    if (!rawTool || typeof rawTool.execute !== "function") {
+      throw new Error("MCP tool not found.");
+    }
+    const descriptor = describeTools({ [input.toolName]: rawTool })[0];
+    const validationError = validateJsonSchema(descriptor.inputSchema, input.arguments);
+    if (validationError) throw new Error(validationError);
+    if (descriptor.risk !== "read" && !input.confirmed) {
+      const durationMs = Date.now() - startedAt;
+      await writeInvocationLog({
+        ...input,
+        invocationId,
+        status: "denied",
+        durationMs,
+        arguments: input.arguments,
+        error: "Confirmation required.",
+      });
+      return {
+        invocationId,
+        status: "denied",
+        error: "Confirmation required for this tool.",
+        durationMs,
+      };
+    }
+    const result = await withTimeout(
+      rawTool.execute(input.arguments, {}),
+      TOOL_CALL_TIMEOUT_MS,
+      `MCP tool call timeout: ${input.serverId}/${input.toolName}`,
+    );
+    const durationMs = Date.now() - startedAt;
+    await writeInvocationLog({
+      ...input,
+      invocationId,
+      status: "success",
+      durationMs,
+      arguments: input.arguments,
+      result,
+    });
+    return { invocationId, status: "success", result, durationMs };
+  } catch (error) {
+    const durationMs = Date.now() - startedAt;
+    const message = error instanceof Error ? error.message : String(error);
+    const status = /timeout/i.test(message) ? "timeout" : "error";
+    await writeInvocationLog({
+      ...input,
+      invocationId,
+      status,
+      durationMs,
+      arguments: input.arguments,
+      error: message,
+    });
+    return { invocationId, status, error: message, durationMs };
+  } finally {
+    await connected?.client.close().catch(() => undefined);
+  }
+}
+
+export async function listMcpInvocationLogs(userId: string, limit = 50) {
+  await connectToMongo();
+  return McpInvocationLogModel.find({ userId })
+    .sort({ createdAt: -1 })
+    .limit(Math.min(Math.max(limit, 1), 100))
+    .lean();
+}
+
 /**
- * 按角色 + 前端勾选的 serverId 列表加载 MCP 工具。
- * mentions 为消息中 @name 匹配到的 server(强制启用)。
+ * 按角色显式挂载配置加载 MCP 工具。
+ * mentions 为消息中 @name 匹配到的 server（未挂载时单次启用）。
  * 单个 server 失败仅跳过,不阻断对话。
  */
 export async function loadMcpToolsForChat(input: {
   userId: string;
   roleId: string;
-  /** 对话面板勾选的 serverId;undefined 表示用角色下所有 enabled 的 */
-  enabledServerIds?: string[];
-  /** 消息中 @name 提到的 server 名,强制启用(即使未勾选) */
+  /** 消息中 @name 提到的 server 名，允许单次启用未挂载 MCP */
   mentionNames?: string[];
 }): Promise<McpToolBundle> {
   const servers = (await listEffectiveMcpServers(input.userId, input.roleId).catch(
@@ -533,15 +865,9 @@ export async function loadMcpToolsForChat(input: {
     return { tools: {}, serverSummaries: [], close: async () => undefined };
   }
 
-  const mentionSet = new Set(
-    (input.mentionNames ?? []).map((n) => n.toLowerCase()),
-  );
-  const selectedSet =
-    input.enabledServerIds === undefined
-      ? null
-      : new Set(input.enabledServerIds);
-
+  const mentionSet = new Set((input.mentionNames ?? []).map((n) => n.toLowerCase()));
   const targets = servers.filter((server) => {
+    if (!server.enabled) return false;
     // @提及 按 name 或 serverId 匹配(名称含空格/中文时 serverId 更稳)
     if (
       mentionSet.has(server.name.toLowerCase()) ||
@@ -549,9 +875,7 @@ export async function loadMcpToolsForChat(input: {
     ) {
       return true;
     }
-    if (!server.enabled) return false;
-    if (selectedSet === null) return true;
-    return selectedSet.has(server.serverId);
+    return server.mounted;
   });
 
   if (targets.length === 0) {
@@ -596,16 +920,12 @@ export async function loadMcpToolsForChat(input: {
       // 原名并入描述让模型仍能理解用途。执行走工具对象内部绑定,不受改名影响。
       let modelFacingName = toolName;
       if (!/^[a-zA-Z0-9_-]+$/.test(toolName)) {
-        modelFacingName = `t_${createHash("md5")
-          .update(toolName)
-          .digest("hex")
-          .slice(0, 8)}`;
+        modelFacingName = `t_${createHash("md5").update(toolName).digest("hex").slice(0, 8)}`;
         const desc = typeof raw.description === "string" ? raw.description : "";
         raw.description = `[${toolName}] ${desc}`.trim();
       }
       // as 断言:FlexibleSchema<unknown> 与 ToolSet 条目的 never 泛型存在方差不兼容,运行时无差异
-      tools[`mcp__${server.serverId}__${modelFacingName}`] =
-        tool as (typeof tools)[string];
+      tools[`mcp__${server.serverId}__${modelFacingName}`] = tool as (typeof tools)[string];
     }
     serverSummaries.push({
       serverId: server.serverId,

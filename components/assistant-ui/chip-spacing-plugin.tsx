@@ -13,12 +13,13 @@ import {
   COMMAND_PRIORITY_HIGH,
   KEY_BACKSPACE_COMMAND,
   type LexicalNode,
+  type LexicalEditor,
   type TextNode,
 } from "lexical";
 import { DirectiveNode } from "@assistant-ui/react-lexical";
 
 /**
- * 指令 chip 辅助插件(两个 effect):
+ * 指令 chip 辅助插件:
  *
  * 背景两条:
  * - 曾有"chip 后自动补空格"的 transform,但 SyncPlugin 的文本往返会重建
@@ -29,6 +30,13 @@ import { DirectiveNode } from "@assistant-ui/react-lexical";
  */
 export const ChipSpacingPlugin: FC = () => {
   const [editor] = useLexicalComposerContext();
+
+  useEffect(() => {
+    registeredEditor = editor;
+    return () => {
+      if (registeredEditor === editor) registeredEditor = null;
+    };
+  }, [editor]);
 
   useEffect(() => {
     return editor.registerCommand(
@@ -70,10 +78,7 @@ export const ChipSpacingPlugin: FC = () => {
               return;
             }
             if (target.kind === "text") {
-              spliceAndSelect(
-                target.node as TextNode,
-                target.node.getTextContent().length - 1,
-              );
+              spliceAndSelect(target.node as TextNode, target.node.getTextContent().length - 1);
               return;
             }
             prev = prev.getPreviousSibling();
@@ -88,6 +93,52 @@ export const ChipSpacingPlugin: FC = () => {
   return null;
 };
 
+let registeredEditor: LexicalEditor | null = null;
+
+/**
+ * TriggerPopover 选中指令后调用一次，在 chip 后插入真实的可编辑空格。
+ * 只响应本次插入，不使用 node transform，避免用户删掉空格后又被自动补回。
+ */
+export function insertSpaceAfterSelectedDirective(): void {
+  const editor = registeredEditor;
+  if (!editor) return;
+
+  editor.update(
+    () => {
+      const selection = $getSelection();
+      if (!$isRangeSelection(selection) || !selection.isCollapsed()) return;
+
+      const anchor = selection.anchor;
+      const node = anchor.getNode();
+      const previous = $isTextNode(node)
+        ? anchor.offset === 0
+          ? node.getPreviousSibling()
+          : null
+        : node.getChildAtIndex(anchor.offset - 1);
+
+      if (!(previous instanceof DirectiveNode)) return;
+
+      if ($isTextNode(node)) {
+        if (/^\s/.test(node.getTextContent())) return;
+        node.insertBefore($createTextNode(" "));
+        node.selectStart();
+        return;
+      }
+
+      const next = previous.getNextSibling();
+      if ($isTextNode(next) && /^\s/.test(next.getTextContent())) {
+        next.selectStart();
+        return;
+      }
+
+      const space = $createTextNode(" ");
+      previous.insertAfter(space);
+      space.selectEnd();
+    },
+    { tag: "history-merge" },
+  );
+}
+
 /** 沿 lastChild 链下潜,找节点最尾部的内容位置(文本或 chip) */
 function tailTextOrDirective(node: LexicalNode): {
   kind: "text" | "directive" | "empty";
@@ -95,9 +146,7 @@ function tailTextOrDirective(node: LexicalNode): {
 } {
   let cur: LexicalNode = node;
   while (!(cur instanceof DirectiveNode) && !$isTextNode(cur)) {
-    const last = (
-      cur as { getLastChild?: () => LexicalNode | null }
-    ).getLastChild?.();
+    const last = (cur as { getLastChild?: () => LexicalNode | null }).getLastChild?.();
     if (!last) return { kind: "empty", node: cur };
     cur = last;
   }

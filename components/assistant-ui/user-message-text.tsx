@@ -22,16 +22,14 @@ const UserMessageTextImpl: FC<TextMessagePartProps> = ({ text }) => {
   const t = useTranslations("thread");
   const segments = parseDirectiveSegments(text);
 
-  /** mention 段只认 MCP;/命令 认技能与 MCP */
-  const allowedKinds = (segType: string): CommandEntry["type"][] | null =>
-    segType === "mention" ? ["mcp"] : null;
+  /** @ 仅认 MCP；/ 仅认技能，避免未挂载 MCP 被斜杠误导为可调用 */
+  const allowedKinds = (segType: string): CommandEntry["type"][] =>
+    segType === "mention" ? ["mcp"] : ["skill"];
 
   const resolveEntry = (segType: string, label: string) => {
     const kinds = allowedKinds(segType);
-    let entry = knownNames.has(label.toLowerCase())
-      ? byName(label)
-      : undefined;
-    if (entry && kinds && !kinds.includes(entry.type)) entry = undefined;
+    let entry = knownNames.has(label.toLowerCase()) ? byName(label) : undefined;
+    if (entry && !kinds.includes(entry.type)) entry = undefined;
     let rest = "";
     if (!entry) {
       for (let len = label.length - 1; len > 0; len--) {
@@ -39,7 +37,7 @@ const UserMessageTextImpl: FC<TextMessagePartProps> = ({ text }) => {
         if (!knownNames.has(prefix.toLowerCase())) continue;
         const candidate = byName(prefix);
         if (!candidate) continue;
-        if (kinds && !kinds.includes(candidate.type)) continue;
+        if (!kinds.includes(candidate.type)) continue;
         entry = candidate;
         rest = label.slice(len);
         break;
@@ -54,7 +52,13 @@ const UserMessageTextImpl: FC<TextMessagePartProps> = ({ text }) => {
         if (seg.kind === "text") return <span key={i}>{seg.text}</span>;
         const trigger = seg.type === "mention" ? "@" : "/";
         const { entry, rest } = resolveEntry(seg.type, seg.label);
-        if (!entry) return <span key={i}>{trigger}{seg.label}</span>;
+        if (!entry)
+          return (
+            <span key={i}>
+              {trigger}
+              {seg.label}
+            </span>
+          );
         return (
           <Fragment key={i}>
             <CommandChip

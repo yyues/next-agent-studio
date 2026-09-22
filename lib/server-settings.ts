@@ -6,14 +6,8 @@ import { ProviderConfigModel } from "@/lib/models/provider-config";
 import { ProviderEntryModel } from "@/lib/models/provider-entry";
 import { RoleProfileModel } from "@/lib/models/role-profile";
 import { RoleResourceModel } from "@/lib/models/role-resource";
-import {
-  removeRoleSkillDir,
-} from "@/lib/skills";
-import {
-  loadEffectiveSkillsCached,
-  invalidateSkillsCache,
-  invalidateAllSkillsCache,
-} from "@/lib/skills-cache";
+import { removeRoleSkillDir } from "@/lib/skills";
+import { loadEffectiveSkillsCached, invalidateSkillsCache } from "@/lib/skills-cache";
 import { SkillDocModel } from "@/lib/models/skill-doc";
 import { BUILTIN_USER_ID, GLOBAL_ROLE_ID, isReservedRoleId } from "@/lib/scopes";
 import { isAdminUser } from "@/lib/admin";
@@ -49,6 +43,8 @@ export type RoleProfile = {
   skillIds: string[];
   /** 引用的外部 MCP 键(`${srcRoleId}/${serverId}`,`__global__` 为全局库) */
   mcpRefs: string[];
+  /** 引用 MCP 的角色级自动挂载覆盖 */
+  mcpMountOverrides: Record<string, boolean>;
   toolToggles: Record<string, boolean>;
   priority: number;
   /** 新会话欢迎页的开场建议问题(逐条展示,点击即发送) */
@@ -60,11 +56,9 @@ export type RoleProfile = {
 const defaultProviderSettings: ProviderSettings = {
   providerName: process.env.DEFAULT_PROVIDER_NAME ?? "openai-compatible",
   baseUrl: process.env.DEFAULT_PROVIDER_BASE_URL ?? "https://api.openai.com/v1",
-  apiKey:
-    process.env.DEFAULT_PROVIDER_API_KEY ?? process.env.OPENAI_API_KEY ?? "",
+  apiKey: process.env.DEFAULT_PROVIDER_API_KEY ?? process.env.OPENAI_API_KEY ?? "",
   model: process.env.DEFAULT_PROVIDER_MODEL ?? "gpt-5.6-luna",
-  embeddingModel:
-    process.env.DEFAULT_EMBEDDING_MODEL ?? "text-embedding-3-small",
+  embeddingModel: process.env.DEFAULT_EMBEDDING_MODEL ?? "text-embedding-3-small",
   embeddingBaseUrl: process.env.DEFAULT_EMBEDDING_BASE_URL ?? "",
   embeddingApiKey: process.env.DEFAULT_EMBEDDING_API_KEY ?? "",
   temperature: Number(process.env.DEFAULT_PROVIDER_TEMPERATURE ?? 0.7),
@@ -89,6 +83,7 @@ const defaultRoleProfiles: RoleProfile[] = [
 - 用户的问题有歧义时,先给出最可能的理解并作答,再提示可以补充信息修正方向。`,
     skillIds: ["base"],
     mcpRefs: [],
+    mcpMountOverrides: {},
     toolToggles: {},
     priority: 0,
     suggestions: [
@@ -119,6 +114,7 @@ const defaultRoleProfiles: RoleProfile[] = [
 - 不臆测不存在的 API;对不确定的库行为注明需要验证。`,
     skillIds: ["base", "developer"],
     mcpRefs: [],
+    mcpMountOverrides: {},
     toolToggles: {},
     priority: 1,
     suggestions: [
@@ -156,11 +152,7 @@ export function personalRoleClause(userId: string) {
 /** 可见集合:自己的私有角色 + 内置单例(__builtin__) + 管理员发布的通用角色 */
 export function visibleRoleFilter(userId: string) {
   return {
-    $or: [
-      personalRoleClause(userId),
-      { userId: BUILTIN_USER_ID },
-      { visibility: "public" },
-    ],
+    $or: [personalRoleClause(userId), { userId: BUILTIN_USER_ID }, { visibility: "public" }],
   };
 }
 
@@ -205,8 +197,7 @@ function toToolToggleObject(value: unknown): Record<string, boolean> {
   }
 
   const entries = Object.entries(value as Record<string, unknown>).filter(
-    ([name, enabled]) =>
-      typeof name === "string" && typeof enabled === "boolean",
+    ([name, enabled]) => typeof name === "string" && typeof enabled === "boolean",
   );
 
   return Object.fromEntries(entries) as Record<string, boolean>;
@@ -217,6 +208,10 @@ function toRoleProfile(doc: Record<string, unknown>): RoleProfile {
     doc.toolToggles instanceof Map
       ? Object.fromEntries(doc.toolToggles.entries())
       : toToolToggleObject(doc.toolToggles);
+  const mcpMountOverrides =
+    doc.mcpMountOverrides instanceof Map
+      ? Object.fromEntries(doc.mcpMountOverrides.entries())
+      : toToolToggleObject(doc.mcpMountOverrides);
 
   return {
     roleId: String(doc.roleId),
@@ -224,12 +219,9 @@ function toRoleProfile(doc: Record<string, unknown>): RoleProfile {
     description: String(doc.description ?? ""),
     enabled: Boolean(doc.enabled),
     systemPrompt: String(doc.systemPrompt),
-    skillIds: Array.isArray(doc.skillIds)
-      ? doc.skillIds.map((v) => String(v))
-      : [],
-    mcpRefs: Array.isArray(doc.mcpRefs)
-      ? doc.mcpRefs.map((v) => String(v))
-      : [],
+    skillIds: Array.isArray(doc.skillIds) ? doc.skillIds.map((v) => String(v)) : [],
+    mcpRefs: Array.isArray(doc.mcpRefs) ? doc.mcpRefs.map((v) => String(v)) : [],
+    mcpMountOverrides,
     toolToggles,
     priority: Number(doc.priority ?? 0),
     suggestions: Array.isArray(doc.suggestions)
@@ -251,9 +243,7 @@ function validateProviderInput(payload: Partial<ProviderSettings>) {
   }
 }
 
-function normalizeProviderInput(
-  payload: Partial<ProviderSettings>,
-): ProviderSettings {
+function normalizeProviderInput(payload: Partial<ProviderSettings>): ProviderSettings {
   validateProviderInput(payload);
   const rawTemp = Number(payload.temperature);
   const temperature =
@@ -261,13 +251,11 @@ function normalizeProviderInput(
       ? rawTemp
       : defaultProviderSettings.temperature;
   return {
-    providerName:
-      payload.providerName?.trim() || defaultProviderSettings.providerName,
+    providerName: payload.providerName?.trim() || defaultProviderSettings.providerName,
     baseUrl: payload.baseUrl!.trim(),
     apiKey: payload.apiKey!.trim(),
     model: payload.model!.trim(),
-    embeddingModel:
-      payload.embeddingModel?.trim() || defaultProviderSettings.embeddingModel,
+    embeddingModel: payload.embeddingModel?.trim() || defaultProviderSettings.embeddingModel,
     embeddingBaseUrl: payload.embeddingBaseUrl?.trim() ?? "",
     embeddingApiKey: payload.embeddingApiKey?.trim() ?? "",
     temperature,
@@ -294,21 +282,14 @@ export async function getProviderSettings(userId: string) {
   // 进程内 TTL 缓存:chat 每轮都读,写路径(upsert*/delete*/setActive*)主动逐出。
   // 回源失败(含 DB 瞬断)不缓存,直接走默认值降级
   try {
-    return await cachedLoad("provider", userId, () =>
-      loadProviderSettingsFromDb(userId),
-    );
+    return await cachedLoad("provider", userId, () => loadProviderSettingsFromDb(userId));
   } catch (error) {
-    console.warn(
-      "Failed to load provider settings from MongoDB. Using defaults.",
-      error,
-    );
+    console.warn("Failed to load provider settings from MongoDB. Using defaults.", error);
     return {
       source: "default" as const,
       config: defaultProviderSettings,
       maskedApiKey: maskApiKey(defaultProviderSettings.apiKey),
-      maskedEmbeddingApiKey: maskApiKey(
-        defaultProviderSettings.embeddingApiKey,
-      ),
+      maskedEmbeddingApiKey: maskApiKey(defaultProviderSettings.embeddingApiKey),
     };
   }
 }
@@ -319,13 +300,11 @@ async function loadProviderSettingsFromDb(userId: string) {
 
   // 聊天供应商:激活的 entry,无则回退默认
   const entries = await ProviderEntryModel.find({ userId }).lean();
-  const active =
-    entries.find((e) => e.active) ?? entries[0] ?? null;
+  const active = entries.find((e) => e.active) ?? entries[0] ?? null;
 
   const doc = await ProviderConfigModel.findOne({ userId }).lean();
   // embedding 为全局内置配置,不随供应商切换
-  const embeddingModel =
-    doc?.embeddingModel || defaultProviderSettings.embeddingModel;
+  const embeddingModel = doc?.embeddingModel || defaultProviderSettings.embeddingModel;
   const embeddingBaseUrl = doc?.embeddingBaseUrl ?? "";
   const embeddingApiKey = decryptSecret(doc?.embeddingApiKey ?? "");
 
@@ -395,9 +374,7 @@ async function ensureProvidersMigrated(userId: string) {
 export async function listProviderEntries(userId: string) {
   await connectToMongo();
   await ensureProvidersMigrated(userId);
-  const entries = await ProviderEntryModel.find({ userId })
-    .sort({ createdAt: 1 })
-    .lean();
+  const entries = await ProviderEntryModel.find({ userId }).sort({ createdAt: 1 }).lean();
   return entries.map((e) => ({
     providerId: e.providerId,
     name: e.name,
@@ -414,15 +391,10 @@ export async function getProviderEntryRaw(userId: string, providerId: string) {
   await connectToMongo();
   const doc = await ProviderEntryModel.findOne({ userId, providerId }).lean();
   // apiKey 解密后返回(调用方 test/export 均需明文)
-  return doc
-    ? { ...doc, apiKey: decryptSecret(doc.apiKey) }
-    : doc;
+  return doc ? { ...doc, apiKey: decryptSecret(doc.apiKey) } : doc;
 }
 
-export async function upsertProviderEntry(
-  userId: string,
-  payload: ProviderEntryInput,
-) {
+export async function upsertProviderEntry(userId: string, payload: ProviderEntryInput) {
   await connectToMongo();
   if (!payload.name?.trim()) throw new Error("name is required.");
   if (!/^https?:\/\//i.test(payload.baseUrl?.trim() ?? "")) {
@@ -444,9 +416,7 @@ export async function upsertProviderEntry(
     providerId,
   }).lean();
   // apiKey 留空表示沿用旧值(库中旧值为密文,原样保留);新建时必须提供
-  const apiKey = payload.apiKey?.trim()
-    ? encryptSecret(payload.apiKey.trim())
-    : existing?.apiKey;
+  const apiKey = payload.apiKey?.trim() ? encryptSecret(payload.apiKey.trim()) : existing?.apiKey;
   if (!apiKey) throw new Error("apiKey is required.");
 
   const rawTemp = Number(payload.temperature);
@@ -462,8 +432,7 @@ export async function upsertProviderEntry(
       userId,
       providerId,
       name: payload.name.trim(),
-      providerName:
-        payload.providerName?.trim() || existing?.providerName || "openai-compatible",
+      providerName: payload.providerName?.trim() || existing?.providerName || "openai-compatible",
       baseUrl: payload.baseUrl.trim(),
       apiKey,
       model: payload.model.trim(),
@@ -500,10 +469,7 @@ export async function deleteProviderEntry(userId: string, providerId: string) {
   return { deleted: true };
 }
 
-export async function setActiveProviderEntry(
-  userId: string,
-  providerId: string,
-) {
+export async function setActiveProviderEntry(userId: string, providerId: string) {
   await connectToMongo();
   const exists = await ProviderEntryModel.findOne({
     userId,
@@ -562,10 +528,7 @@ export async function upsertEmbeddingSettings(
   };
 }
 
-export async function upsertProviderSettings(
-  userId: string,
-  payload: Partial<ProviderSettings>,
-) {
+export async function upsertProviderSettings(userId: string, payload: Partial<ProviderSettings>) {
   await connectToMongo();
   const existing = await getProviderSettings(userId);
 
@@ -584,9 +547,7 @@ export async function upsertProviderSettings(
         ? payload.embeddingApiKey
         : existing.config.embeddingApiKey,
     temperature:
-      typeof payload.temperature === "number"
-        ? payload.temperature
-        : existing.config.temperature,
+      typeof payload.temperature === "number" ? payload.temperature : existing.config.temperature,
   });
 
   // normalized 持有明文(供返回掩码);落库时加密 apiKey 字段
@@ -652,6 +613,7 @@ async function seedDefaultRoles() {
               systemPrompt: { $ifNull: ["$systemPrompt", role.systemPrompt] },
               skillIds: { $ifNull: ["$skillIds", role.skillIds] },
               mcpRefs: { $ifNull: ["$mcpRefs", []] },
+              mcpMountOverrides: { $ifNull: ["$mcpMountOverrides", {}] },
               toolToggles: { $ifNull: ["$toolToggles", role.toolToggles] },
               priority: { $ifNull: ["$priority", role.priority] },
               suggestions: { $ifNull: ["$suggestions", role.suggestions] },
@@ -668,14 +630,9 @@ export async function getRoleSettings(userId: string) {
   // 进程内 TTL 缓存:chat 每轮都读,写路径(setCurrentRole/create/update/delete)
   // 主动逐出;回源失败不缓存,直接走默认值降级
   try {
-    return await cachedLoad("roles", userId, () =>
-      loadRoleSettingsFromDb(userId),
-    );
+    return await cachedLoad("roles", userId, () => loadRoleSettingsFromDb(userId));
   } catch (error) {
-    console.warn(
-      "Failed to load role settings from MongoDB. Using defaults.",
-      error,
-    );
+    console.warn("Failed to load role settings from MongoDB. Using defaults.", error);
     return {
       currentRoleId: "general",
       roles: defaultRoleProfiles,
@@ -743,10 +700,7 @@ export async function setCurrentRole(userId: string, roleId: string) {
 
   // 并入账号表(原生写入,理由同 getRoleSettings);无账号记录的
   // fallback 用户(demo-user)不持久化,仅本次会话生效
-  await userAccountsRaw().updateOne(
-    { email: userId },
-    { $set: { currentRoleId: roleId } },
-  );
+  await userAccountsRaw().updateOne({ email: userId }, { $set: { currentRoleId: roleId } });
 
   invalidateCache("roles", userId);
   return {
@@ -768,22 +722,16 @@ export async function resolveRuntimeConfig(input: {
   ]);
   const provider = input.overrideProvider
     ? normalizeProviderInput({
-        providerName:
-          input.overrideProvider.providerName ??
-          providerFromDb.config.providerName,
-        baseUrl:
-          input.overrideProvider.baseUrl ?? providerFromDb.config.baseUrl,
+        providerName: input.overrideProvider.providerName ?? providerFromDb.config.providerName,
+        baseUrl: input.overrideProvider.baseUrl ?? providerFromDb.config.baseUrl,
         apiKey: input.overrideProvider.apiKey ?? providerFromDb.config.apiKey,
         model: input.overrideProvider.model ?? providerFromDb.config.model,
         embeddingModel:
-          input.overrideProvider.embeddingModel ??
-          providerFromDb.config.embeddingModel,
+          input.overrideProvider.embeddingModel ?? providerFromDb.config.embeddingModel,
         embeddingBaseUrl:
-          input.overrideProvider.embeddingBaseUrl ??
-          providerFromDb.config.embeddingBaseUrl,
+          input.overrideProvider.embeddingBaseUrl ?? providerFromDb.config.embeddingBaseUrl,
         embeddingApiKey:
-          input.overrideProvider.embeddingApiKey ??
-          providerFromDb.config.embeddingApiKey,
+          input.overrideProvider.embeddingApiKey ?? providerFromDb.config.embeddingApiKey,
         temperature:
           typeof input.overrideProvider.temperature === "number"
             ? input.overrideProvider.temperature
@@ -793,9 +741,7 @@ export async function resolveRuntimeConfig(input: {
 
   const roleId =
     input.requestedRoleId &&
-    roleSettings.roles.some(
-      (role) => role.roleId === input.requestedRoleId && role.enabled,
-    )
+    roleSettings.roles.some((role) => role.roleId === input.requestedRoleId && role.enabled)
       ? input.requestedRoleId
       : roleSettings.currentRoleId;
 
@@ -811,9 +757,7 @@ export async function resolveRuntimeConfig(input: {
     isBuiltinRole(roleId),
   );
   // 显式 /命令 调用 → 仅注入命中技能(显式优先);未使用 / 时保持全量注入
-  const explicitCommands = (input.invokedSkillCommands ?? []).map((c) =>
-    c.toLowerCase(),
-  );
+  const explicitCommands = (input.invokedSkillCommands ?? []).map((c) => c.toLowerCase());
   const effectiveSkills =
     explicitCommands.length > 0
       ? loadedSkills.filter((s) => explicitCommands.includes(s.id.toLowerCase()))
@@ -859,9 +803,7 @@ export function filterToolsByRole<T extends Record<string, unknown>>(
     return tools;
   }
 
-  const filteredEntries = Object.entries(tools).filter(
-    ([name]) => toolToggles[name] !== false,
-  );
+  const filteredEntries = Object.entries(tools).filter(([name]) => toolToggles[name] !== false);
   return Object.fromEntries(filteredEntries) as T;
 }
 
@@ -902,6 +844,7 @@ export async function createRole(
     enabled: payload.enabled ?? true,
     skillIds: [],
     mcpRefs: [],
+    mcpMountOverrides: {},
     toolToggles: {},
     priority: payload.priority ?? 10,
     suggestions: (payload.suggestions ?? []).map((v) => v.trim()).filter(Boolean),
@@ -950,8 +893,7 @@ export async function updateRole(
   if (!existing) {
     throw new Error("Role not found.");
   }
-  const isShared =
-    isBuiltinRole(roleId) || existing.visibility === "public";
+  const isShared = isBuiltinRole(roleId) || existing.visibility === "public";
   if (isShared && !admin) {
     throw new Error("Shared roles can only be modified by admins.");
   }
@@ -960,12 +902,9 @@ export async function updateRole(
   }
 
   const update: Record<string, unknown> = {};
-  if (payload.displayName !== undefined)
-    update.displayName = payload.displayName;
-  if (payload.description !== undefined)
-    update.description = payload.description;
-  if (payload.systemPrompt !== undefined)
-    update.systemPrompt = payload.systemPrompt;
+  if (payload.displayName !== undefined) update.displayName = payload.displayName;
+  if (payload.description !== undefined) update.description = payload.description;
+  if (payload.systemPrompt !== undefined) update.systemPrompt = payload.systemPrompt;
   if (payload.enabled !== undefined) update.enabled = payload.enabled;
   if (payload.priority !== undefined) update.priority = payload.priority;
   if (payload.suggestions !== undefined)
@@ -978,7 +917,14 @@ export async function updateRole(
     update.skillIds = await validateSkillRefs(userId, payload.skillIds);
   }
   if (payload.mcpRefs !== undefined) {
-    update.mcpRefs = await validateMcpRefs(userId, payload.mcpRefs);
+    const validRefs = await validateMcpRefs(userId, payload.mcpRefs);
+    update.mcpRefs = validRefs;
+    const previousOverrides = toToolToggleObject(existing.mcpMountOverrides);
+    update.mcpMountOverrides = Object.fromEntries(
+      validRefs
+        .filter((ref) => previousOverrides[ref] !== undefined)
+        .map((ref) => [ref, previousOverrides[ref]]),
+    );
   }
   if (payload.visibility !== undefined) {
     if (!admin) {
@@ -1006,7 +952,8 @@ export async function updateRole(
   // 角色列表/字段变化:逐出角色缓存;mcpRefs 变化影响所有引用方的
   // 有效 MCP 列表(发布角色可被他人引用),全清 MCP 缓存
   invalidateCache("roles", userId);
-  if (update.mcpRefs !== undefined) invalidateCache("mcp");
+  if (update.mcpRefs !== undefined || update.mcpMountOverrides !== undefined)
+    invalidateCache("mcp");
 
   return toRoleProfile(doc as Record<string, unknown>);
 }
@@ -1060,9 +1007,7 @@ export async function getRoleById(userId: string, roleId: string) {
       roleId,
     }).lean();
   }
-  const role = doc
-    ? toRoleProfile(doc as Record<string, unknown>)
-    : defaultRole;
+  const role = doc ? toRoleProfile(doc as Record<string, unknown>) : defaultRole;
 
   if (!role) throw new Error("Role not found.");
 
@@ -1078,14 +1023,10 @@ export async function getRoleById(userId: string, roleId: string) {
     SkillDocModel.find({ roleId, enabled: true, scope: "role" }).lean(),
     RoleResourceModel.find({ roleId }).lean(),
     isBuiltinRole(roleId) ? listGlobalSkillDocs() : Promise.resolve([]),
-    (role.skillIds ?? []).length > 0
-      ? findSkillDocsByRefs(role.skillIds)
-      : Promise.resolve([]),
+    (role.skillIds ?? []).length > 0 ? findSkillDocsByRefs(role.skillIds) : Promise.resolve([]),
   ]);
 
-  const ownKeys = new Set(
-    skillDocs.map((d) => `${d.roleId}/${d.skillId}`),
-  );
+  const ownKeys = new Set(skillDocs.map((d) => `${d.roleId}/${d.skillId}`));
   const refEntries = [
     ...(globalDocs as Array<Record<string, unknown>>).map((d) => ({
       doc: d,
@@ -1095,9 +1036,7 @@ export async function getRoleById(userId: string, roleId: string) {
     ...refDocs.map((d) => ({
       doc: d,
       ref: toRefKey(String(d.roleId), String(d.skillId)),
-      source: (d.scope === "global" ? "global" : "role") as
-        | "global"
-        | "role",
+      source: (d.scope === "global" ? "global" : "role") as "global" | "role",
     })),
   ].filter((e) => !ownKeys.has(e.ref));
 
