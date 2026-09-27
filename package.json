@@ -2,6 +2,9 @@
   "name": "Agent-studio",
   "version": "0.1.0",
   "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "dev": "next dev --turbopack",
     "build": "next build",
@@ -10,7 +13,11 @@
     "format:fix": "oxfmt --ignore-path=.gitignore",
     "lint": "oxlint --ignore-pattern='.agents/**' && oxfmt --check --ignore-path=.gitignore",
     "lint:fix": "oxlint --fix --ignore-pattern='.agents/**' && oxfmt --ignore-path=.gitignore",
-    "test:provider": "node scripts/test-provider-persistence.mjs"
+    "test:provider": "node scripts/test-provider-persistence.mjs",
+    "runtime:dev": "pnpm --filter @agent-studio/mcp-runtime dev",
+    "runtime:build": "pnpm --filter @agent-studio/mcp-runtime build",
+    "runtime:start": "pnpm --filter @agent-studio/mcp-runtime start",
+    "deploy:cloud": "node scripts/deploy-cloud.mjs"
   },
   "dependencies": {
     "@ai-sdk/mcp": "^2.0.49",

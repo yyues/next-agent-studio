@@ -12,6 +12,7 @@ import {
   testMcpServer,
   type McpUpsertPayload,
 } from "@/lib/mcp/client";
+import { syncMcpRuntimeServer } from "@/lib/mcp/runtime";
 
 function getUserId(req: Request) {
   const url = new URL(req.url);
@@ -54,6 +55,16 @@ export async function POST(
     await assertRoleAccess(uid, roleId);
     const body = (await req.json()) as McpUpsertPayload;
     const server = await upsertMcpServer(uid, roleId, body);
+    if (server.type === "stdio") {
+      try {
+        await syncMcpRuntimeServer(server);
+      } catch (runtimeError) {
+        return NextResponse.json(
+          { error: runtimeError instanceof Error ? `MCP Runtime sync failed: ${runtimeError.message}` : "MCP Runtime sync failed." },
+          { status: 502 },
+        );
+      }
+    }
     const { headers, env, ...rest } = server;
     return NextResponse.json({
       server: {

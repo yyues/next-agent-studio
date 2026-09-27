@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getAuthUserId } from "@/lib/auth-request";
 import { invokeMcpTool } from "@/lib/mcp/client";
+import { invokeMcpRuntimeTool } from "@/lib/mcp/runtime";
+import { listEffectiveMcpServers } from "@/lib/mcp/client";
 
 export async function POST(
   req: Request,
@@ -18,6 +20,11 @@ export async function POST(
     const userId = await getAuthUserId(req, body.userId);
     if (!body.roleId || !body.toolName) {
       return NextResponse.json({ error: "roleId and toolName are required." }, { status: 400 });
+    }
+    const server = (await listEffectiveMcpServers(userId, body.roleId)).find((item) => item.serverId === serverId);
+    if (server?.type === "stdio" && process.env.MCP_RUNTIME_URL) {
+      const result = await invokeMcpRuntimeTool({ serverId, toolName: body.toolName, arguments: body.arguments ?? {} });
+      return NextResponse.json(result);
     }
     const result = await invokeMcpTool({
       userId,
