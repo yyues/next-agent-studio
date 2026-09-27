@@ -2,7 +2,7 @@ import "server-only";
 import { createHash } from "crypto";
 import { createMCPClient, type MCPClient } from "@ai-sdk/mcp";
 import { Experimental_StdioMCPTransport } from "@ai-sdk/mcp/mcp-stdio";
-import type { ToolSet } from "ai";
+import { jsonSchema, type ToolSet } from "ai";
 import { connectToMongo } from "@/lib/mongodb";
 import { McpServerModel, toMcpServerConfig, type McpServerConfig } from "@/lib/models/mcp-server";
 import { RoleProfileModel } from "@/lib/models/role-profile";
@@ -694,7 +694,9 @@ async function connectRuntimeServer(server: McpServerConfig) {
       item.name,
       {
         description: item.description,
-        inputSchema: item.inputSchema ?? { type: "object", properties: {} },
+        inputSchema: jsonSchema(
+          (item.inputSchema ?? { type: "object", properties: {} }) as Record<string, unknown>,
+        ),
         execute: (args: unknown) =>
           invokeMcpRuntimeTool({
             serverId: server.serverId,
