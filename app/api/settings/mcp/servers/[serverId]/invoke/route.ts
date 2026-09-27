@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAuthUserId } from "@/lib/auth-request";
 import { invokeMcpTool } from "@/lib/mcp/client";
-import { invokeMcpRuntimeTool } from "@/lib/mcp/runtime";
+import { ensureMcpRuntimeServer, invokeMcpRuntimeTool } from "@/lib/mcp/runtime";
 import { listEffectiveMcpServers } from "@/lib/mcp/client";
 
 export async function POST(
@@ -23,6 +23,7 @@ export async function POST(
     }
     const server = (await listEffectiveMcpServers(userId, body.roleId)).find((item) => item.serverId === serverId);
     if (server?.type === "stdio" && process.env.MCP_RUNTIME_URL) {
+      await ensureMcpRuntimeServer(server);
       const result = await invokeMcpRuntimeTool({ serverId, toolName: body.toolName, arguments: body.arguments ?? {} });
       return NextResponse.json(result);
     }

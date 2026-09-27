@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAuthUserId } from "@/lib/auth-request";
 import { inspectMcpServer } from "@/lib/mcp/client";
-import { inspectMcpRuntimeServer } from "@/lib/mcp/runtime";
+import { ensureMcpRuntimeServer, inspectMcpRuntimeServer } from "@/lib/mcp/runtime";
 import { listEffectiveMcpServers } from "@/lib/mcp/client";
 
 export async function GET(
@@ -15,6 +15,7 @@ export async function GET(
     const roleId = url.searchParams.get("roleId") ?? "general";
     const server = (await listEffectiveMcpServers(userId, roleId)).find((item) => item.serverId === serverId);
     if (server?.type === "stdio" && process.env.MCP_RUNTIME_URL) {
+      await ensureMcpRuntimeServer(server);
       return NextResponse.json(await inspectMcpRuntimeServer(serverId));
     }
     return NextResponse.json(await inspectMcpServer({ userId, roleId, serverId }));

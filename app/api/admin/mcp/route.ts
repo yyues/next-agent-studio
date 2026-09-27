@@ -18,6 +18,7 @@ import {
   testMcpServer,
   type McpUpsertPayload,
 } from "@/lib/mcp/client";
+import { syncMcpRuntimeServer } from "@/lib/mcp/runtime";
 
 function deny() {
   return NextResponse.json({ error: "Admin required." }, { status: 403 });
@@ -45,6 +46,9 @@ export async function POST(req: Request) {
   try {
     const body = (await req.json()) as McpUpsertPayload;
     const server = await upsertGlobalMcpServer(body);
+    if (server.type === "stdio") {
+      await syncMcpRuntimeServer(server);
+    }
     const { headers, env, ...rest } = server;
     return NextResponse.json({
       server: {

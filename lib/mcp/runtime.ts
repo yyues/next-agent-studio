@@ -41,6 +41,17 @@ export async function syncMcpRuntimeServer(server: McpServerConfig) {
   });
 }
 
+/** Reconnect a stdio server after the Runtime container has restarted. */
+export async function ensureMcpRuntimeServer(server: McpServerConfig) {
+  if (server.type !== "stdio") return null;
+  const data = await runtimeFetch("/v1/servers");
+  const servers = Array.isArray(data.servers) ? data.servers : [];
+  if (servers.some((item) => item && typeof item === "object" && (item as { serverId?: unknown }).serverId === server.serverId)) {
+    return data;
+  }
+  return syncMcpRuntimeServer(server);
+}
+
 export async function inspectMcpRuntimeServer(serverId: string) {
   return runtimeFetch(`/v1/servers/${encodeURIComponent(serverId)}/tools`);
 }

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireAdminUser } from "@/lib/admin";
 import { invokeMcpTool, listGlobalMcpServers } from "@/lib/mcp/client";
+import { ensureMcpRuntimeServer, invokeMcpRuntimeTool } from "@/lib/mcp/runtime";
 
 export async function POST(
   req: Request,
@@ -18,6 +19,16 @@ export async function POST(
     if (!body.toolName) return NextResponse.json({ error: "toolName is required." }, { status: 400 });
     const server = (await listGlobalMcpServers()).find((item) => item.serverId === serverId);
     if (!server) return NextResponse.json({ error: "MCP server not found." }, { status: 404 });
+    if (server.type === "stdio" && process.env.MCP_RUNTIME_URL) {
+      await ensureMcpRuntimeServer(server);
+      return NextResponse.json(
+        await invokeMcpRuntimeTool({
+          serverId,
+          toolName: body.toolName,
+          arguments: body.arguments ?? {},
+        }),
+      );
+    }
     const result = await invokeMcpTool({
       userId: admin.userId,
       roleId: "__global__",

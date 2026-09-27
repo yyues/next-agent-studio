@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireAdminUser } from "@/lib/admin";
 import { inspectMcpServer, listGlobalMcpServers } from "@/lib/mcp/client";
+import { ensureMcpRuntimeServer, inspectMcpRuntimeServer } from "@/lib/mcp/runtime";
 
 export async function GET(
   req: Request,
@@ -12,6 +13,10 @@ export async function GET(
     const { serverId } = await params;
     const server = (await listGlobalMcpServers()).find((item) => item.serverId === serverId);
     if (!server) return NextResponse.json({ error: "MCP server not found." }, { status: 404 });
+    if (server.type === "stdio" && process.env.MCP_RUNTIME_URL) {
+      await ensureMcpRuntimeServer(server);
+      return NextResponse.json(await inspectMcpRuntimeServer(serverId));
+    }
     return NextResponse.json(await inspectMcpServer({ userId: admin.userId, roleId: "__global__", serverId, server }));
   } catch (error) {
     return NextResponse.json(
