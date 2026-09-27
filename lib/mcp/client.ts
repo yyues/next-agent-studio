@@ -17,6 +17,12 @@ import {
 import { findMcpRowsByRefs } from "@/lib/resource-refs";
 import { cachedLoad, invalidateCache } from "@/lib/config-cache";
 import { McpInvocationLogModel } from "@/lib/models/mcp-invocation-log";
+import {
+  ensureMcpRuntimeServer,
+  inspectMcpRuntimeServer,
+  invokeMcpRuntimeTool,
+  isMcpRuntimeConfigured,
+} from "@/lib/mcp/runtime";
 
 const CONNECT_TIMEOUT_MS = 8000;
 // stdio 型首连较慢(npx 首次运行需下载依赖),放宽超时
@@ -674,6 +680,33 @@ async function connectSingle(server: McpConnectTarget) {
   };
 }
 
+async function connectRuntimeServer(server: McpServerConfig) {
+  await ensureMcpRuntimeServer(server);
+  const inspected = (await inspectMcpRuntimeServer(server.serverId)) as {
+    tools?: Array<{
+      name: string;
+      description?: string;
+      inputSchema?: unknown;
+    }>;
+  };
+  const tools = Object.fromEntries(
+    (inspected.tools ?? []).map((item) => [
+      item.name,
+      {
+        description: item.description,
+        inputSchema: item.inputSchema ?? { type: "object", properties: {} },
+        execute: (args: unknown) =>
+          invokeMcpRuntimeTool({
+            serverId: server.serverId,
+            toolName: item.name,
+            arguments: (args ?? {}) as Record<string, unknown>,
+          }).then((result) => result.result),
+      },
+    ]),
+  );
+  return { client: undefined, tools, toolNames: Object.keys(tools) };
+}
+
 function summarizeValue(value: unknown, max = 8000): string {
   const redact = (input: unknown, key = ""): unknown => {
     if (/(token|authorization|password|secret|apikey|api_key)/i.test(key)) {
@@ -885,6 +918,10 @@ export async function loadMcpToolsForChat(input: {
   const clients: MCPClient[] = [];
   const results = await Promise.allSettled(
     targets.map(async (server) => {
+      if (server.type === "stdio" && isMcpRuntimeConfigured()) {
+        const connected = await connectRuntimeServer(server);
+        return { server, ...connected };
+      }
       const connected = await connectSingle(server);
       clients.push(connected.client);
       return { server, ...connected };
